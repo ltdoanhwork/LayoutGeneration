@@ -1,0 +1,17 @@
+tensorflow==2.20.0
+opencv-python==4.12.0.88
+tqdm==4.67.1
+scenedetect==0.6.7.1
+lpips==0.1.4
+torch==2.8.0
+dists-pytorch==0.1
+scikit-learn==1.7.2
+matplotlib==3.10.7
+ftfy 
+regex 
+tqdm
+git+https://github.com/openai/CLIP.git
+scikit-image
+tensorflow_hub
+imscore
+ruptures
