@@ -53,7 +53,7 @@ tqdm>=4.62.0
 pandas>=1.3.0
 scenedetect[opencv]>=0.41.0
 ```
-
+a
 ---
 
 ## 🚀 Quick Start
