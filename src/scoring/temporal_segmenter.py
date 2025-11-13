@@ -133,8 +133,8 @@ class AutoSegmenter:
                  min_len: int = 3,
                  max_len: int = 0,
                  mode: str = "auto",   # "auto" | "boundary" | "rbf"
-                 kmin: int = 2,
-                 kmax: int = 10,
+                 kmin: int = 1,
+                 kmax: int = 2,
                  hint_strength: float = 0.15,  # add to B(t) where scene id changes
                  peak_radius: int = 2):
         assert mode in ("auto", "boundary", "rbf")

@@ -10,7 +10,7 @@ outputs/
 src/models/TransNetV2/
 outputs_14653/*
 examples
-objectfree
+objectfree/extracted_images/*
 outputs_eval
 outputs_story_eval
 outputs_detection
@@ -20,3 +20,5 @@ objectfree/Grounded-SAM-2/SAM_2.egg-info
 Pipeline
 data/*
 repos/*
+objectfree/annotations/*
+/backup/*

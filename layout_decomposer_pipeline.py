@@ -135,6 +135,7 @@ def get_mask_from_image(input_image_path, output_dir):
     print(f"  Saved refined mask to: {shape_mask_path}")
     
     return shape_mask_path
+
 def normalize_and_merge_scenes(
     scenes: List[Scene],
     min_len_frames: int = 0,
@@ -469,7 +470,29 @@ def main():
     input_mask_folder = os.path.join(object_free_results['output_dir'], 'masked_objects')
     os.makedirs(input_mask_folder, exist_ok=True)
     image_pool = os.path.join(object_free_results['output_dir'], 'cropped_objects')
-    cm.batch_create_masks(image_pool, input_mask_folder, mask_type='simple')
+    
+    # Check how many cropped objects we have
+    if os.path.exists(image_pool):
+        cropped_files = [f for f in os.listdir(image_pool) if f.endswith('.png')]
+        print(f"Found {len(cropped_files)} cropped objects in {image_pool}")
+    else:
+        print(f"[WARN] cropped_objects folder not found: {image_pool}")
+        cropped_files = []
+    
+    # If we have few cropped objects, create masks for all keyframes instead
+    keyframe_folder = os.path.join(args.out_dir, "keyframes")
+    if os.path.exists(keyframe_folder):
+        keyframe_files = [f for f in os.listdir(keyframe_folder) if f.endswith('.jpg')]
+        print(f"Found {len(keyframe_files)} keyframes in {keyframe_folder}")
+        
+        if len(cropped_files) < len(keyframe_files) * 0.1:  # Less than 10% have objects
+            print(f"[INFO] Few objects detected ({len(cropped_files)}/{len(keyframe_files)}), creating masks for all keyframes")
+            cm.batch_create_masks(keyframe_folder, input_mask_folder, mask_type='center')  # Use center masks for all
+        else:
+            cm.batch_create_masks(image_pool, input_mask_folder, mask_type='simple')
+    else:
+        print(f"[ERROR] Keyframe folder not found: {keyframe_folder}")
+        cm.batch_create_masks(image_pool, input_mask_folder, mask_type='simple')
     
     # STEP 3: Spatial assignment optimization
     print("\n[STEP 3] Starting shape assembly optimization...")
@@ -822,20 +845,18 @@ python layout_decomposer_pipeline.py \
 
 test case chạy đc
 python layout_decomposer_pipeline.py \
-  --video ./data/samples/Sakuga/21047.mp4 \
-  --backend transnetv2  \
-  --model_dir src/models/TransNetV2 \
-  --prob_threshold 0.5 \
-  --distance_backend dists --dists_as_distance 1 \
-  --sample_stride 10 --max_frames_per_scene 40 \
-  --keyframes_per_scene 1 --nms_radius 4 \
+  --video ./data/samples/Sakuga/6261.mp4 \
+  --backend pyscenedetect --threshold 27 \
+  --distance_backend lpips --lpips_net alex \
+  --sample_stride 10 --max_frames_per_scene 30 \
+  --keyframes_per_scene 1 --nms_radius 3 \
   --resize_w 320 --resize_h 180 \
   --out_dir data/outputs/run_collage \
   --export_preview \
   --run_object_free_pipeline \
   --detection_config objectfree/config.yaml \
   --detection_checkpoint ./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt \
-  --input_shape_layout repos/Colla/input_data/image_collections/cars/01.jpg \
+  --input_shape_layout /home/serverai/ltdoanh/LayoutGeneration/repos/Colla/input_data/layout/baby.png \
   --input_mask_folder repos/Colla/input_data/image_collections/children_mask \
   --scaling_factor 1
 """
