@@ -1,0 +1,6 @@
+model_path: "/home/serverai/ltdoanh/LayoutGeneration/objectfree/yoloe/runs/detect/train8/weights/best.pt"
+input_path: "/home/serverai/ltdoanh/LayoutGeneration/yolo_splits/new_dataset/general/test"
+threshold: 0.2
+prompt: "characters in cartoon"
+save_path: "/home/serverai/ltdoanh/LayoutGeneration/yolo_splits/output"
+type_content: "image"  # 'image' or 'video'

@@ -37,15 +37,54 @@ def load_scenes_json(path: str) -> List[Tuple[int, int]]:
     return scenes
 
 
+# def load_keyframes_csv(path: str) -> List[int]:
+#     out = []
+#     with open(path, "r", encoding="utf-8") as f:
+#         reader = csv.DictReader(f)
+#         if "frame_idx" not in reader.fieldnames:
+#             raise ValueError("keyframes.csv must contain a 'frame_idx' column.")
+#         for row in reader:
+#             out.append(int(row["frame_idx"]))
+#     return sorted(out)
+
 def load_keyframes_csv(path: str) -> List[int]:
-    out = []
+    """
+    Load keyframe indices from CSV.
+
+    Supported formats:
+      - Old pipeline:  header includes 'frame_idx'
+      - DSN pipeline:  header includes 'frame_global'
+      - Fallback:      header includes 'frame'
+
+    Returns:
+      Sorted list of global frame indices (int).
+    """
+    out: List[int] = []
     with open(path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
-        if "frame_idx" not in reader.fieldnames:
-            raise ValueError("keyframes.csv must contain a 'frame_idx' column.")
+        fieldnames = reader.fieldnames or []
+
+        # Decide which column to use as "global frame index"
+        if "frame_idx" in fieldnames:
+            key_col = "frame_idx"
+        elif "frame_global" in fieldnames:
+            key_col = "frame_global"
+        elif "frame" in fieldnames:
+            key_col = "frame"
+        else:
+            raise ValueError(
+                f"keyframes.csv must contain one of "
+                f"['frame_idx', 'frame_global', 'frame'], got: {fieldnames}"
+            )
+
         for row in reader:
-            out.append(int(row["frame_idx"]))
+            val = row.get(key_col, "")
+            if val is None or val == "":
+                continue
+            out.append(int(val))
+
     return sorted(out)
+
 
 
 def embed_video_frames(

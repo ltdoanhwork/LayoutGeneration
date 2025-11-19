@@ -18,8 +18,6 @@ Usage:
 Requires:
 - ruptures, numpy, pillow, scikit-learn
 - scoring.get_clip_embedding, scoring.get_iqa_score
-
-Author: You
 """
 import os
 import re

@@ -41,7 +41,14 @@ from src.keyframe.medoid_selector import (
 from src.keyframe.random_selector import RandomSelector
 
 sys.path.append('objectfree')
-from objectfree.eval_objectfree import CompletePipeline
+python temporal_layout_composer_unified.py \
+  --mode run \
+  --keyframes-dir /home/serverai/ltdoanh/LayoutGeneration/outputs/run_with_object_free_6261_20251101_133231/object_free_evaluation/keyframes \
+  --shape-image optimal_layout.png \
+  --min-len 3 \
+  --max-len 4 \
+  --w-clip 0.8 \
+  --w-iqa 0.2from objectfree import complete_pipeline_advanced
 from utils.io import *
 
 # Import Colla modules
@@ -63,7 +70,7 @@ def run_complete_object_free_pipeline(keyframes_folder, output_base, device="cud
     """Run complete object-free pipeline using CompletePipeline class"""
     
     # Initialize pipeline
-    pipeline = CompletePipeline(device=device, output_dir=output_base, config_path=config_path)
+    pipeline = complete_pipeline_advanced.AdvancedBBoxPipeline(device=device, output_dir=output_base)
     pipeline.initialize_detectors()
     
     # Override config and checkpoint paths
@@ -445,253 +452,253 @@ def main():
     print("\n" + "="*80)
     print("RUNNING COLLA LAYOUT DECOMPOSER PIPELINE")
     print("="*80)
-    print(f"[DEBUG] input_shape_layout: {args.input_shape_layout}")
-    print(f"[DEBUG] object_free_results output_dir: {object_free_results['output_dir']}")
+    
+    # Setup paths
+    colla_output_dir = object_free_results['output_dir']
+    input_shape = args.input_shape_layout
+    input_mask_folder = os.path.join(colla_output_dir, 'masked_objects')
+    input_image_collection_folder = os.path.join(colla_output_dir, 'cropped_objects')
+    
+    print(f"\n[Colla Input Verification]")
+    print(f"  input_shape: {input_shape}")
+    print(f"  input_mask_folder: {input_mask_folder}")
+    print(f"  input_image_collection: {input_image_collection_folder}")
+    print(f"  output_dir: {colla_output_dir}")
+    print(f"  scaling_factor: {args.scaling_factor}")
+    
+    # Verify cropped objects exist
+    if not os.path.exists(input_image_collection_folder):
+        raise FileNotFoundError(f"Cropped objects folder not found: {input_image_collection_folder}")
+    
+    cropped_files = [f for f in os.listdir(input_image_collection_folder) if f.endswith(('.png', '.jpg'))]
+    print(f"  Found {len(cropped_files)} cropped images")
+    
+    if len(cropped_files) == 0:
+        raise FileNotFoundError(f"No cropped images in {input_image_collection_folder}")
+    
+    if len(cropped_files) > 12:
+        print(f"  [WARN] Many images ({len(cropped_files)}), may cause segfault")
+    
+    # CRITICAL: Free all previous models before Colla
+    print("\n[Freeing Memory Before Colla Pipeline]")
+    try:
+        # Delete all heavy objects
+        if 'metric' in locals():
+            del metric
+        if 'selector' in locals():
+            del selector
+        if 'detector' in locals():
+            del detector
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        print("  ✓ Freed Python objects")
+        
+        # Clear CUDA memory completely
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            print(f"  ✓ Cleared CUDA cache (freed {torch.cuda.memory_allocated() / 1e9:.2f} GB)")
+        
+        # Wait a bit for system to stabilize
+        import time
+        time.sleep(2)
+        print("  ✓ Memory cleanup completed")
+        
+    except Exception as e:
+        print(f"  [WARN] Memory cleanup had issues: {e}")
     
     # Prepare resources
     prepare_colla_pipeline()
     
+    # ============================================
+    # STEP 0: Generate Mask from Input RGB Image
+    # ============================================
+    print(f"\n[STEP 0] Generating mask from input shape image")
+    shape_mask_path = get_mask_from_image(input_shape, colla_output_dir)
+    
+    # ============================================
+    # STEP 1: Shape Decomposition
+    # ============================================
+    print(f"\n[STEP 1] Shape decomposition")
     try:
-        # STEP 0: Generate mask from input image using U2NET
-        print(f"\n[STEP 0] Generating mask from input image")
-        shape_mask_path = get_mask_from_image(args.input_shape_layout, object_free_results['output_dir'])
+        sd.generate_cuts(shape_mask_path, colla_output_dir)
+        print("  ✓ Shape decomposition completed")
         
-        # STEP 1: Shape decomposition using refined mask
-        print(f"\n[STEP 1] Shape decomposition using refined mask")
-        sd.generate_cuts(shape_mask_path, object_free_results['output_dir'])
-        print("[SUCCESS] generate_cuts completed")
+        # Verify slicing_result.json was created
+        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
+        if not os.path.exists(slicing_result_path):
+            print(f"  [WARN] slicing_result.json not created at {slicing_result_path}")
+            print(f"  [DEBUG] Checking output_dir contents...")
+            if os.path.exists(colla_output_dir):
+                files = [f for f in os.listdir(colla_output_dir) if f.endswith('.json')]
+                print(f"  [DEBUG] JSON files in output_dir: {files}")
+        else:
+            print(f"  ✓ slicing_result.json created successfully")
     except Exception as e:
-        print(f"[ERROR] generate_cuts failed: {e}")
+        print(f"[ERROR] Shape decomposition failed: {e}")
         import traceback
         traceback.print_exc()
         raise
     
-    # STEP 2: Create masks from object pool
-    input_mask_folder = os.path.join(object_free_results['output_dir'], 'masked_objects')
+    # ============================================
+    # STEP 2: Create Masks from Cropped Objects
+    # ============================================
+    print(f"\n[STEP 2] Creating masks from cropped objects")
     os.makedirs(input_mask_folder, exist_ok=True)
-    image_pool = os.path.join(object_free_results['output_dir'], 'cropped_objects')
     
-    # Check how many cropped objects we have
-    if os.path.exists(image_pool):
-        cropped_files = [f for f in os.listdir(image_pool) if f.endswith('.png')]
-        print(f"Found {len(cropped_files)} cropped objects in {image_pool}")
-    else:
-        print(f"[WARN] cropped_objects folder not found: {image_pool}")
-        cropped_files = []
+    print(f"  Creating masks for {len(cropped_files)} cropped images...")
+    cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='simple')
     
-    # If we have few cropped objects, create masks for all keyframes instead
-    keyframe_folder = os.path.join(args.out_dir, "keyframes")
-    if os.path.exists(keyframe_folder):
-        keyframe_files = [f for f in os.listdir(keyframe_folder) if f.endswith('.jpg')]
-        print(f"Found {len(keyframe_files)} keyframes in {keyframe_folder}")
-        
-        if len(cropped_files) < len(keyframe_files) * 0.1:  # Less than 10% have objects
-            print(f"[INFO] Few objects detected ({len(cropped_files)}/{len(keyframe_files)}), creating masks for all keyframes")
-            cm.batch_create_masks(keyframe_folder, input_mask_folder, mask_type='center')  # Use center masks for all
-        else:
-            cm.batch_create_masks(image_pool, input_mask_folder, mask_type='simple')
-    else:
-        print(f"[ERROR] Keyframe folder not found: {keyframe_folder}")
-        cm.batch_create_masks(image_pool, input_mask_folder, mask_type='simple')
+    # Verify masks were created
+    mask_files = [f for f in os.listdir(input_mask_folder) if f.endswith('.png')]
+    print(f"  Created {len(mask_files)} masks")
     
-    # STEP 3: Spatial assignment optimization
-    print("\n[STEP 3] Starting shape assembly optimization...")
+    if len(mask_files) == 0:
+        raise FileNotFoundError(f"Failed to create masks in {input_mask_folder}")
     
-    # Pre-optimization diagnostics
-    mask_files = sorted([f for f in os.listdir(input_mask_folder) if f.endswith('.png')])
-    num_masks = len(mask_files)
-    print(f"  Processing {num_masks} masks for optimization")
+    if len(mask_files) != len(cropped_files):
+        print(f"  [WARN] Mask count ({len(mask_files)}) != image count ({len(cropped_files)})")
     
-    # Safety check: warn about potential segfault with many images
-    if num_masks > 12:
-        print(f"  [WARN] Many masks ({num_masks}), high risk of segfault in optimization")
-        print(f"  [TIP] Consider reducing --keyframes_per_scene from {args.keyframes_per_scene}")
-        print(f"  [TIP] Or try --keyframes_per_scene 1 for fewer images")
-    elif num_masks == 0:
-        print(f"  [ERROR] No mask files found in {input_mask_folder}")
-        raise FileNotFoundError(f"No mask files in {input_mask_folder}")
+    # ============================================
+    # STEP 3: Spatial Assignment Optimization
+    # ============================================
+    print(f"\n[STEP 3] Spatial assignment optimization")
+    print(f"  Processing {len(mask_files)} masks")
     
-    # Debug: check tree structure if possible
+    if len(mask_files) > 12:
+        print(f"  [WARN] Many masks, high risk of segfault")
+    
+    # Validate tree structure
     try:
         import json
-        slicing_result_path = os.path.join(object_free_results['output_dir'], 'slicing_result.json')
-        if os.path.exists(slicing_result_path):
-            with open(slicing_result_path, 'r') as f:
-                slicing_data = json.load(f)
-            # Count leaves in the tree
-            def count_leaves(node):
-                if 'children' not in node or not node['children']:
-                    return 1
-                return sum(count_leaves(child) for child in node['children'])
+        # slicing_result.json is created by sd.generate_cuts in colla_output_dir
+        # But we need to check where it actually gets created
+        # Based on STEP 1: sd.generate_cuts(shape_mask_path, colla_output_dir)
+        # It should create slicing_result.json in colla_output_dir
+        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
+        
+        # Debug: check what files were actually created
+        if not os.path.exists(slicing_result_path):
+            print(f"  [DEBUG] Looking for slicing_result.json in: {colla_output_dir}")
+            if os.path.exists(colla_output_dir):
+                files = os.listdir(colla_output_dir)
+                print(f"  [DEBUG] Files in output_dir: {files}")
+            raise FileNotFoundError(f"slicing_result.json not found at {slicing_result_path}")
+        
+        with open(slicing_result_path, 'r') as f:
+            slicing_data = json.load(f)
+        
+        def count_leaves(node):
+            if 'children' not in node or not node['children']:
+                return 1
+            return sum(count_leaves(child) for child in node['children'])
+        
+        def get_tree_height(node):
+            if 'children' not in node or not node['children']:
+                return 0
+            return 1 + max(get_tree_height(child) for child in node['children'])
+        
+        if 'tree' in slicing_data:
+            tree_leaves = count_leaves(slicing_data['tree'])
+            tree_height = get_tree_height(slicing_data['tree'])
+            print(f"  Tree structure: height={tree_height}, leaves={tree_leaves}")
+            print(f"  Available masks: {len(mask_files)}")
             
-            if 'tree' in slicing_data:
-                tree_leaves = count_leaves(slicing_data['tree'])
-                print(f"  Tree has {tree_leaves} leaves, {num_masks} masks available")
-                if tree_leaves > num_masks:
-                    print(f"  [WARN] Tree needs {tree_leaves} images but only {num_masks} available - likely segfault cause")
-                    print(f"  [SUGGESTION] Increase --keyframes_per_scene or reduce tree complexity")
+            # Critical validation
+            if tree_height == 0:
+                raise ValueError(f"Tree height is 0 - shape decomposition failed to create proper tree structure. This will cause segfault.")
+            
+            if tree_leaves == 0:
+                raise ValueError(f"Tree has no leaves - cannot assign images. This will cause segfault.")
+            
+            if tree_leaves > len(mask_files):
+                print(f"  [WARN] Tree needs {tree_leaves} images but only {len(mask_files)} available")
+                print(f"  [SUGGESTION] Increase --keyframes_per_scene to get more images")
+            
+            if tree_leaves < len(mask_files):
+                print(f"  [INFO] Tree has {tree_leaves} leaves but {len(mask_files)} images available")
+                print(f"  [INFO] Optimization will select best {tree_leaves} images")
+                
+    except FileNotFoundError as e:
+        print(f"[ERROR] {e}")
+        raise
+    except ValueError as e:
+        print(f"[ERROR] Tree validation failed: {e}")
+        print(f"[SOLUTION] The shape layout image may be too simple or too complex.")
+        print(f"[SUGGESTION] Try a different shape layout image with clearer structure.")
+        raise
     except Exception as e:
-        print(f"  [INFO] Could not analyze tree structure: {e}")
+        print(f"  [WARN] Could not validate tree: {e}")
     
+    # Run optimization with validation
     try:
-        # Clear memory before optimization
-        import gc
-        gc.collect()
-        print("  Cleared memory before optimization")
-        
-        # Run optimization with timeout protection
-        import signal
-        
-        def timeout_handler(signum, frame):
-            raise TimeoutError("[ERROR] so.optimization exceeded 10 minutes timeout")
-        
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(600)  # 10 minutes timeout
-        
-        try:
-            # Add debug prints before calling so.optimization
-            print(f"  [DEBUG] About to call so.optimization with:")
-            print(f"    - shape_mask_path: {shape_mask_path}")
-            print(f"    - input_mask_folder: {input_mask_folder}")
-            print(f"    - output_dir: {object_free_results['output_dir']}")
-            
-            # Monkey patch assign_image to add debug prints
-            original_assign_image = so.assign_image
-            def debug_assign_image(forest, assignment):
-                print(f"  [DEBUG] assign_image called with:")
-                print(f"    - forest has {len(forest)} trees")
-                tree_heights = [tree.get_height() for tree in forest]
-                print(f"    - tree heights: {tree_heights}")
-                print(f"    - assignment keys: {list(assignment.keys())}")
-                for depth, images in assignment.items():
-                    print(f"      depth {depth}: {len(images)} images")
-                
-                # Check for potential issues
-                max_height = max(tree_heights) if tree_heights else 0
-                min_height = min(tree_heights) if tree_heights else 0
-                print(f"    - max tree height: {max_height}, min tree height: {min_height}")
-                
-                # Check if assignment has all needed depths
-                needed_depths = set(range(max_height + 1))
-                available_depths = set(assignment.keys())
-                missing_depths = needed_depths - available_depths
-                if missing_depths:
-                    print(f"    [ERROR] Missing depths in assignment: {missing_depths}")
-                
-                # Check for empty lists
-                empty_depths = [depth for depth, images in assignment.items() if not images]
-                if empty_depths:
-                    print(f"    [WARN] Empty image lists at depths: {empty_depths}")
-                
-                return original_assign_image(forest, assignment)
-            
-            so.assign_image = debug_assign_image
-            
-            so.optimization(shape_mask_path, input_mask_folder, object_free_results['output_dir'])
-            signal.alarm(0)  # Cancel alarm
-            print("[SUCCESS] Shape assembly optimization completed")
-        except TimeoutError as e:
-            signal.alarm(0)
-            print(f"[ERROR] {e}")
-            raise
-        except Exception as e:
-            signal.alarm(0)
-            print(f"[ERROR] so.optimization failed: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-            
+        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir)
+        print("  ✓ Optimization completed")
     except Exception as e:
-        print(f"\n[FATAL] STEP 3 failed: {e}")
-        print("[TIP] Segfault likely in sas_optimization.py assign_image() - tree leaves vs images mismatch")
-        print("[SUGGESTION] Try --keyframes_per_scene 1 or check slicing_result.json tree structure")
+        print(f"[ERROR] Optimization failed: {e}")
+        print(f"[TIP] This is likely caused by:")
+        print(f"  1. Tree structure mismatch (tree leaves != available images)")
+        print(f"  2. Invalid shape layout image")
+        print(f"  3. Memory overflow with too many images")
+        import traceback
+        traceback.print_exc()
         raise
     
-    # STEP 4: Render collage
-    print("\n[STEP 4] Rendering collage...")
+    # ============================================
+    # STEP 4: Collage Assembly & Rendering
+    # ============================================
+    print(f"\n[STEP 4] Collage assembly & rendering")
     
-    # Load layout to check canvas size
+    # Verify slicing result exists
     import json
-    layout_path = os.path.join(object_free_results['output_dir'], 'slicing_result.json')
-    try:
-        with open(layout_path, 'r') as f:
-            layout = json.load(f)
-    except FileNotFoundError:
-        print(f"[ERROR] slicing_result.json not found at {layout_path}")
-        print("[HINT] Check if STEP 3 (shape assembly optimization) completed successfully")
-        raise
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] slicing_result.json is corrupted: {e}")
-        raise
+    slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
+    if not os.path.exists(slicing_result_path):
+        raise FileNotFoundError(f"slicing_result.json not found at {slicing_result_path}")
+    
+    # Check canvas size
+    with open(slicing_result_path, 'r') as f:
+        layout = json.load(f)
     
     canvas_w = layout['width'] * args.scaling_factor
     canvas_h = layout['height'] * args.scaling_factor
-    canvas_size_mb = (canvas_w * canvas_h * 4) / 1e6  # RGBA = 4 bytes per pixel
-    num_images = len(layout['images'])
-    num_parts = len(layout['parts'])
+    canvas_size_mb = (canvas_w * canvas_h * 4) / 1e6
     
-    print(f"  Canvas size: {canvas_w}x{canvas_h} = {canvas_size_mb:.1f} MB")
-    print(f"  Number of images: {num_images}")
-    print(f"  Number of parts: {num_parts}")
+    print(f"  Canvas: {canvas_w}x{canvas_h} ({canvas_size_mb:.1f} MB)")
+    print(f"  Images: {len(layout.get('images', []))}, Parts: {len(layout.get('parts', []))}")
     
-    # Warn if too large or too many images
     if canvas_size_mb > 500:
-        print(f"  [WARN] Canvas very large ({canvas_size_mb:.1f} MB), may cause segfault")
-    if num_images > 30:
-        print(f"  [WARN] Too many images ({num_images}), consider using fewer keyframes")
-    if num_parts > num_images:
-        print(f"  [WARN] More parts than images ({num_parts} > {num_images}), some parts may be empty")
+        print(f"  [WARN] Large canvas ({canvas_size_mb:.1f} MB), may be slow")
     
     try:
-        # Clear GPU cache if available
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                print("  Cleared CUDA cache")
-        except:
-            pass
-        
-        # Force garbage collection before rendering
-        import gc
-        gc.collect()
-        print("  Cleared memory before rendering")
-        
-        ca.render_collage(image_pool, object_free_results['output_dir'], args.scaling_factor)
-        print("[SUCCESS] Collage rendering completed")
+        ca.render_collage(input_image_collection_folder, colla_output_dir, args.scaling_factor)
+        print("  ✓ Rendering completed")
     except Exception as e:
-        print(f"[ERROR] Collage rendering failed: {e}")
+        print(f"[ERROR] Rendering failed: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Try with reduced scaling factor if it fails
-        if args.scaling_factor > 1:
-            new_scale = max(1, args.scaling_factor - 1)
-            print(f"\n[RETRY] Attempting with reduced scaling factor ({new_scale} instead of {args.scaling_factor})")
-            try:
-                ca.render_collage(image_pool, object_free_results['output_dir'], new_scale)
-                print(f"[SUCCESS] Collage rendering completed with scaling_factor={new_scale}")
-            except Exception as e2:
-                print(f"[ERROR] Collage rendering failed again: {e2}")
-                import traceback
-                traceback.print_exc()
-        else:
-            raise
+        raise
     
-    # STEP 5: Evaluate results
-    print("\n[STEP 5] Evaluating pipeline output...")
+    # ============================================
+    # STEP 5: Evaluation (Optional)
+    # ============================================
+    print(f"\n[STEP 5] Evaluating results")
     try:
-        metrics = evaluation.evaluate_pipeline_output(object_free_results['output_dir'],
-                                                       shape_mask_path)
-        print("Evaluation Metrics:")
+        metrics = evaluation.evaluate_pipeline_output(colla_output_dir, shape_mask_path)
+        print("  Evaluation Metrics:")
         for metric_name, metric_value in metrics.items():
-            print(f"  {metric_name}: {metric_value}")
+            print(f"    {metric_name}: {metric_value}")
     except Exception as e:
-        print(f"[WARN] Evaluation failed: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"  [WARN] Evaluation failed: {e}")
     
-    print("="*60)
+    print("\n" + "="*80)
+    print("COLLA PIPELINE COMPLETED SUCCESSFULLY!")
+    print("="*80)
+    print(f"  Output directory: {colla_output_dir}")
+    print(f"  Final collage: {os.path.join(colla_output_dir, 'final_collage.png')}")
+    print("="*80)
     
     print("\n[DONE] Full pipeline completed!")
 
@@ -839,25 +846,23 @@ python layout_decomposer_pipeline.py \
   --detection_config objectfree/config.yaml \
   --detection_checkpoint ./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt \
   --input_shape_layout repos/Colla/input_data/image_collections/cars/01.jpg \
-  --input_mask_folder repos/Colla/input_data/image_collections/children_mask \
-  --scaling_factor 1
+  --scaling_factor 2
 
 
 test case chạy đc
 python layout_decomposer_pipeline.py \
-  --video ./data/samples/Sakuga/6261.mp4 \
+  --video ./data/samples/Sakuga/14652.mp4 \
   --backend pyscenedetect --threshold 27 \
   --distance_backend lpips --lpips_net alex \
   --sample_stride 10 --max_frames_per_scene 30 \
-  --keyframes_per_scene 1 --nms_radius 3 \
+  --keyframes_per_scene 2 --nms_radius 3 \
   --resize_w 320 --resize_h 180 \
   --out_dir data/outputs/run_collage \
   --export_preview \
   --run_object_free_pipeline \
   --detection_config objectfree/config.yaml \
   --detection_checkpoint ./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt \
-  --input_shape_layout /home/serverai/ltdoanh/LayoutGeneration/repos/Colla/input_data/layout/baby.png \
-  --input_mask_folder repos/Colla/input_data/image_collections/children_mask \
+  --input_shape_layout repos/Colla/input_data/image_collections/cars/01.jpg \
   --scaling_factor 1
 """
 

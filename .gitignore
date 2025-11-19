@@ -22,3 +22,4 @@ data/*
 repos/*
 objectfree/annotations/*
 /backup/*
+/yolo_splits/*
