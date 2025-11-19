@@ -7,6 +7,7 @@ Batch Evaluation Pipeline (DSN version)
 - Then add extra metrics (LPIPS gap/diversity, MS-SWD Color)
 """
 import os, json, argparse, subprocess, glob
+from tqdm import tqdm
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
@@ -74,6 +75,7 @@ class BatchEvaluationPipeline:
 
     def _run_keyframe_extraction(self, video_path: str, output_dir: str) -> Optional[Dict[str,str]]:
         try:
+            cmd = [
             "python", "-m", "eval.run_dsn_pipeline",
             "--video", video_path,
             "--out_dir", output_dir,
@@ -179,7 +181,7 @@ class BatchEvaluationPipeline:
                       eval_backbone="resnet50", eval_device="cuda",
                       eval_sample_stride=1, eval_max_frames=200, eval_tau=0.5,
                       with_baselines=True) -> bool:
-        print(f"\n=== Processing: {video_id} ===")
+        tqdm.write(f"\n=== Processing: {video_id} ===")
         try:
             # 1) Extract (DSN)
             pipeline_out = os.path.join(self.pipeline_out_dir, video_id)
@@ -188,7 +190,7 @@ class BatchEvaluationPipeline:
             if extraction is None:
                 self.errors[video_id] = "Extraction failed"
                 return False
-            print(f"  ✅ keyframes: {extraction['keyframes_csv']}")
+            tqdm.write(f"  ✅ keyframes: {extraction['keyframes_csv']}")
 
             # 2) Evaluate
             eval_out = os.path.join(self.eval_out_dir, video_id)
@@ -199,7 +201,7 @@ class BatchEvaluationPipeline:
             if metrics is None:
                 self.errors[video_id] = "Evaluation failed"
                 return False
-            print(f"  ✅ evaluation done")
+            tqdm.write(f"  ✅ evaluation done")
 
             # 3) Store
             self.results[video_id] = {
@@ -209,9 +211,9 @@ class BatchEvaluationPipeline:
                 "metrics": metrics,
                 "timestamp": datetime.now().isoformat()
             }
-            print("  📊 RecErr:", metrics.get("RecErr", "N/A"),
-                  " Frechet:", metrics.get("Frechet", "N/A"),
-                  " LPIPS_Gap:", metrics.get("LPIPS_PerceptualGap", "N/A"))
+            tqdm.write(f"  📊 RecErr: {metrics.get('RecErr', 'N/A')} "
+                       f"Frechet: {metrics.get('Frechet', 'N/A')} "
+                       f"LPIPS_Gap: {metrics.get('LPIPS_PerceptualGap', 'N/A')}")
             return True
         except Exception as e:
             self.errors[video_id] = str(e)
@@ -253,7 +255,7 @@ class BatchEvaluationPipeline:
             }
         outp = os.path.join(self.output_base_dir, "summary_results.json")
         with open(outp, "w", encoding="utf-8") as f: json.dump(summary, f, indent=2, ensure_ascii=False)
-        print(f"\n📊 Summary saved to: {outp}")
+        tqdm.write(f"\n📊 Summary saved to: {outp}")
 
 def main():
     ps = argparse.ArgumentParser("Batch eval with DSN")
@@ -278,7 +280,8 @@ def main():
     ps.add_argument("--eval_max_frames", type=int, default=200)
     ps.add_argument("--eval_tau", type=float, default=0.5)
     ps.add_argument("--with_baselines", action="store_true")
-    ps.add_argument("--max_videos", type=int, default=None)
+    ps.add_argument("--max_videos", "--limit", type=int, default=None, 
+                    help="Limit the number of videos to process")
     ps.add_argument("--num_workers", type=int, default=1)
     ps.add_argument("--debug", action="store_true")
     ps.add_argument("--backend", type=str, default="pyscenedetect",
@@ -306,9 +309,8 @@ def main():
     videos = pipe.find_videos()
     if args.max_videos: videos = videos[:args.max_videos]
     ok = 0; fail = 0
-    for i, vp in enumerate(videos, 1):
+    for vp in tqdm(videos, desc="Batch Eval"):
         vid = os.path.splitext(os.path.basename(vp))[0]
-        print(f"[{i}/{len(videos)}] {vid}")
         if pipe.process_video(vp, vid, args.eval_backbone, args.eval_device,
                               args.eval_sample_stride, args.eval_max_frames,
                               args.eval_tau, args.with_baselines):
@@ -322,3 +324,23 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+python -m eval.batch_eval \
+    --videos_dir "data/samples/Sakuga" \
+    --output_dir "outputs/val_runs/test_no_ckpt" \
+    --resize_w 320 \
+    --resize_h 180 \
+    --sample_stride 5 \
+    --embedder clip_vitb32 \
+    --backend pyscenedetect \
+    --threshold 27 \
+    --eval_backbone resnet50 \
+    --eval_device cuda \
+    --eval_sample_stride 1 \
+    --eval_max_frames 200 \
+    --eval_tau 0.5 \
+    --with_baselines \
+    --debug \
+    --limit 1
+"""
