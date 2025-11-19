@@ -23,3 +23,4 @@ repos/*
 objectfree/annotations/*
 /backup/*
 /yolo_splits/*
+runs/*
