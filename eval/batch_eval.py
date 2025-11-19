@@ -239,7 +239,8 @@ class BatchEvaluationPipeline:
         if self.results:
             rec = []; fre = []; scov=[]; tcov=[]; lp_gap=[]; lp_div=[]; ms=[]
             for vid, r in self.results.items():
-                m = r["metrics"]
+                # Metrics are nested: r["metrics"]["method"] contains DSN results
+                m = r["metrics"].get("method", r["metrics"])  # fallback to r["metrics"] if no "method" key
                 rec.append(m.get("RecErr")); fre.append(m.get("Frechet"))
                 scov.append(m.get("SceneCoverage")); tcov.append(m.get("TemporalCoverage@tau"))
                 lp_gap.append(m.get("LPIPS_PerceptualGap")); lp_div.append(m.get("LPIPS_DiversitySel"))
