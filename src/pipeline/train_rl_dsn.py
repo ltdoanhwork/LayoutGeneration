@@ -4,10 +4,12 @@ import os, json, argparse, subprocess
 from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
+import cv2
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 from src.datasets import build_epoch_index, load_scene_dir
 from src.vision_flow import compute_flow_magnitude_robust
@@ -147,7 +149,29 @@ def main():
     best_metric = None
     best_ckpt_path = None
 
-    for epoch in range(1, args.epochs + 1):
+    # Log hyperparameters to tensorboard
+    hparams_dict = {
+        'lr': args.lr,
+        'entropy_coef': args.entropy_coef,
+        'budget_ratio': args.budget_ratio,
+        'budget_penalty': args.budget_penalty,
+        'w_div': args.w_div,
+        'w_rep': args.w_rep,
+        'w_rec': args.w_rec,
+        'w_fd': args.w_fd,
+        'w_ms': args.w_ms,
+        'w_motion': args.w_motion,
+        'feat_dim': args.feat_dim,
+        'enc_hidden': args.enc_hidden,
+        'lstm_hidden': args.lstm_hidden,
+    }
+    writer.add_text('hyperparameters', 
+                    '\n'.join([f'{k}: {v}' for k, v in hparams_dict.items()]), 0)
+
+    # Epoch progress bar
+    epoch_pbar = tqdm(range(1, args.epochs + 1), desc="Training", position=0)
+    
+    for epoch in epoch_pbar:
         np.random.shuffle(scene_dirs)
         ep_rewards: List[float] = []
 
@@ -157,8 +181,17 @@ def main():
         entropy_sum = 0.0
         mean_prob_sum = 0.0
         budget_gap_sum = 0.0
+        
+        # Collect data for visualizations
+        all_probs = []  # For histogram
+        all_rewards = []  # For distribution
+        sample_frames_selected = []  # For image visualization
+        sample_frames_rejected = []
 
-        for scene_dir in scene_dirs:
+        # Scene progress bar
+        scene_pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}", leave=False, position=1)
+        
+        for scene_dir in scene_pbar:
             sample = load_scene_dir(scene_dir, load_frames=True)  # frames needed for MS-SWD
             feats = l2_normalize(sample.feats.astype(np.float32), axis=1)
             frames = sample.frames
@@ -241,6 +274,36 @@ def main():
             entropy_sum += float(entropy.item())
             mean_prob_sum += float(probs.mean().item())
             budget_gap_sum += abs(len(sel_idx) - B_target)
+            
+            # Collect for visualizations
+            all_probs.append(probs.squeeze(0).detach().cpu().numpy())
+            all_rewards.append(R)
+            
+            # Collect sample frames for visualization (first scene of epoch)
+            if len(sample_frames_selected) == 0 and frames is not None and len(sel_idx) > 0:
+                # Get up to 8 selected frames
+                for idx in sel_idx[:8]:
+                    if idx < len(frames):
+                        sample_frames_selected.append(frames[idx])
+                # Get up to 8 rejected frames
+                rejected_idx = [i for i in range(T) if i not in sel_idx]
+                for idx in rejected_idx[:8]:
+                    if idx < len(frames):
+                        sample_frames_rejected.append(frames[idx])
+
+            # Update scene progress bar with current stats
+            scene_pbar.set_postfix({
+                'R': f'{R:.3f}',
+                'sel': f'{len(sel_idx)}/{T}',
+                'prob': f'{probs.mean().item():.3f}'
+            })
+            
+            # Log per-step metrics (every 10 steps to avoid overhead)
+            if global_step % 10 == 0:
+                writer.add_scalar('step/reward', R, global_step)
+                writer.add_scalar('step/selection_count', len(sel_idx), global_step)
+                writer.add_scalar('step/mean_prob', probs.mean().item(), global_step)
+                writer.add_scalar('step/entropy', entropy.item(), global_step)
 
             global_step += 1
 
@@ -251,16 +314,66 @@ def main():
         mean_prob = mean_prob_sum / max(1, len(scene_dirs))
         mean_budget_gap = budget_gap_sum / max(1, len(scene_dirs))
 
-        print(f"[Epoch {epoch}] "
-              f"meanR={meanR:.4f} | sel_ratio={sel_ratio:.4f} | "
-              f"entropy={mean_entropy:.4f} | mean_prob={mean_prob:.4f} | "
-              f"budget_gap={mean_budget_gap:.3f}")
+        # Update epoch progress bar
+        epoch_pbar.set_postfix({
+            'meanR': f'{meanR:.4f}',
+            'sel_ratio': f'{sel_ratio:.4f}',
+            'entropy': f'{mean_entropy:.4f}'
+        })
+
+        tqdm.write(f"[Epoch {epoch}] "
+                   f"meanR={meanR:.4f} | sel_ratio={sel_ratio:.4f} | "
+                   f"entropy={mean_entropy:.4f} | mean_prob={mean_prob:.4f} | "
+                   f"budget_gap={mean_budget_gap:.3f}")
 
         writer.add_scalar("train/mean_reward", meanR, epoch)
         writer.add_scalar("train/sel_ratio", sel_ratio, epoch)
         writer.add_scalar("train/entropy", mean_entropy, epoch)
         writer.add_scalar("train/mean_prob", mean_prob, epoch)
         writer.add_scalar("train/budget_gap", mean_budget_gap, epoch)
+        
+        # Add reward statistics
+        if ep_rewards:
+            writer.add_scalar("train/reward_std", float(np.std(ep_rewards)), epoch)
+            writer.add_scalar("train/reward_min", float(np.min(ep_rewards)), epoch)
+            writer.add_scalar("train/reward_max", float(np.max(ep_rewards)), epoch)
+        
+        # Add probability histogram
+        if all_probs:
+            all_probs_concat = np.concatenate(all_probs)
+            writer.add_histogram('train/prob_distribution', all_probs_concat, epoch)
+            writer.add_scalar('train/prob_std', float(np.std(all_probs_concat)), epoch)
+        
+        # Add reward distribution
+        if all_rewards:
+            writer.add_histogram('train/reward_distribution', np.array(all_rewards), epoch)
+        
+        # Visualize sample frames (selected vs rejected)
+        if sample_frames_selected:
+            # Create grid of selected frames
+            selected_grid = []
+            for frm in sample_frames_selected[:8]:
+                # Resize to small size for visualization
+                frm_small = cv2.resize(frm, (160, 90))
+                # Convert BGR to RGB
+                frm_rgb = cv2.cvtColor(frm_small, cv2.COLOR_BGR2RGB)
+                selected_grid.append(frm_rgb)
+            
+            if selected_grid:
+                # Stack into grid (2 rows x 4 cols)
+                grid_tensor = torch.from_numpy(np.array(selected_grid)).permute(0, 3, 1, 2).float() / 255.0
+                writer.add_images('frames/selected_keyframes', grid_tensor, epoch, dataformats='NCHW')
+        
+        if sample_frames_rejected:
+            rejected_grid = []
+            for frm in sample_frames_rejected[:8]:
+                frm_small = cv2.resize(frm, (160, 90))
+                frm_rgb = cv2.cvtColor(frm_small, cv2.COLOR_BGR2RGB)
+                rejected_grid.append(frm_rgb)
+            
+            if rejected_grid:
+                grid_tensor = torch.from_numpy(np.array(rejected_grid)).permute(0, 3, 1, 2).float() / 255.0
+                writer.add_images('frames/rejected_frames', grid_tensor, epoch, dataformats='NCHW')
 
         # save ckpt per epoch
         ckpt_path = save_dir / f"dsn_checkpoint_ep{epoch}.pt"
@@ -275,6 +388,7 @@ def main():
                 "--videos_dir", args.val_videos_dir,
                 "--output_dir", str(val_out),
                 "--checkpoint", str(ckpt_path),
+                "--device", eval_device,  # Add device for DSN inference
                 "--feat_dim", str(args.feat_dim),
                 "--enc_hidden", str(args.enc_hidden),
                 "--lstm_hidden", str(args.lstm_hidden),
@@ -286,7 +400,7 @@ def main():
                 "--resize_h", str(args.eval_resize_h),
                 "--embedder", args.eval_embedder,
                 "--backend", args.eval_backend,
-                "--eval_device", eval_device,
+                "--eval_device", eval_device,  # Device for evaluation metrics
             ]
             # Detector-specific
             if args.eval_threshold is not None:
@@ -308,10 +422,10 @@ def main():
             if args.eval_num_workers is not None:
                 cmd += ["--num_workers", str(args.eval_num_workers)]
 
-            print("[Validate] Running:", " ".join(cmd))
+            tqdm.write("[Validate] Running batch_eval...")
             r = subprocess.run(cmd, capture_output=True, text=True)
             if r.returncode != 0:
-                print("[Validate][Error]", r.stderr)
+                tqdm.write(f"[Validate][Error] {r.stderr}")
             else:
                 summary_path = val_out / "summary_results.json"
                 if summary_path.exists():
@@ -330,11 +444,12 @@ def main():
                             best_ckpt_path = str(ckpt_path)
 
     # end epochs
+    epoch_pbar.close()
     writer.close()
     torch.save({"encoder": enc.state_dict(), "policy": pol.state_dict()}, save_dir / "dsn_checkpoint.pt")
     if best_ckpt_path:
-        print(f"Best checkpoint by RecErr_mean: {best_ckpt_path}")
-    print("Training done.")
+        tqdm.write(f"\n✅ Best checkpoint by RecErr_mean: {best_ckpt_path}")
+    tqdm.write("\n🎉 Training done.")
 
 if __name__ == "__main__":
     main()
@@ -344,7 +459,7 @@ if __name__ == "__main__":
 python -m src.pipeline.train_rl_dsn \
   --dataset_root outputs/sakuga_dataset \
   --save_dir outputs/dsn_runs/base_v1 \
-  --epochs 5 \
+  --epochs 10 \
   --device cuda:0 \
   --feat_dim 512 --enc_hidden 256 --lstm_hidden 128 \
   --budget_ratio 0.06 --Bmin 3 --Bmax 15 \

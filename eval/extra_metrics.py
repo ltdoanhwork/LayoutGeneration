@@ -7,7 +7,7 @@ import numpy as np
 import cv2
 
 from src.distance_selector.registry import create_metric
-from src.metrics.ms_swd import ms_swd_color
+from eval.metrics import ms_swd_color
 
 def load_keyframes_csv(path: str):
     rows = []
@@ -17,13 +17,15 @@ def load_keyframes_csv(path: str):
             rows.append(row)
     return rows
 
-def sample_video_frames(video_path: str, frame_ids: List[int]) -> List[np.ndarray]:
+def sample_video_frames(video_path: str, frame_ids: List[int], resize: tuple[int,int] = (320,180)) -> List[np.ndarray]:
     cap = cv2.VideoCapture(video_path)
     out = []
     for i in frame_ids:
         cap.set(cv2.CAP_PROP_POS_FRAMES, int(i))
         ok, frm = cap.read()
         if not ok: continue
+        if resize[0] > 0 and resize[1] > 0:
+            frm = cv2.resize(frm, resize, interpolation=cv2.INTER_AREA)
         out.append(frm)
     cap.release()
     return out
@@ -103,17 +105,58 @@ def main():
     key_ids = sorted({int(r["frame_global"]) for r in rows})
 
     metrics = {}
+    
+    # Create LPIPS metric once and reuse
     try:
-        metrics["LPIPS_PerceptualGap"] = lpips_gap(args.video, key_ids, device=args.lpips_device, net=args.lpips_net)
-    except Exception:
+        print(f"[extra_metrics] Computing LPIPS metrics on {args.lpips_device}...")
+        metric = create_metric("lpips", net=args.lpips_net, device=args.lpips_device)
+        
+        # Get all frames and keyframes with consistent resize
+        all_frames = read_all_frames_sparse(args.video, stride=5)
+        keys = sample_video_frames(args.video, key_ids)
+        
+        if all_frames and keys:
+            # Preprocess once
+            import torch
+            Ts_all = [metric.preprocess_bgr(f) for f in all_frames]
+            Ts_keys = [metric.preprocess_bgr(f) for f in keys]
+            
+            # Compute LPIPS Gap
+            vals_gap = []
+            with torch.no_grad():
+                for Ta in Ts_all:
+                    m = +1e9
+                    for Tk in Ts_keys:
+                        d = metric.pair_distance(Ta, Tk)
+                        if d < m: m = d
+                    vals_gap.append(m)
+            metrics["LPIPS_PerceptualGap"] = float(np.mean(vals_gap)) if vals_gap else float("nan")
+            
+            # Compute LPIPS Diversity
+            if len(Ts_keys) >= 2:
+                vals_div = []
+                with torch.no_grad():
+                    for i in range(len(Ts_keys)):
+                        for j in range(i+1, len(Ts_keys)):
+                            vals_div.append(metric.pair_distance(Ts_keys[i], Ts_keys[j]))
+                metrics["LPIPS_DiversitySel"] = float(np.mean(vals_div)) if vals_div else 0.0
+            else:
+                metrics["LPIPS_DiversitySel"] = 0.0
+        else:
+            metrics["LPIPS_PerceptualGap"] = float("nan")
+            metrics["LPIPS_DiversitySel"] = float("nan")
+            
+    except Exception as e:
+        print(f"[extra_metrics] LPIPS computation failed: {e}")
         metrics["LPIPS_PerceptualGap"] = float("nan")
-    try:
-        metrics["LPIPS_DiversitySel"] = lpips_diversity(args.video, key_ids, device=args.lpips_device, net=args.lpips_net)
-    except Exception:
         metrics["LPIPS_DiversitySel"] = float("nan")
+    
+    # Compute MS-SWD
     try:
+        print(f"[extra_metrics] Computing MS-SWD Color...")
         metrics["MS_SWD_Color"] = ms_swd_color_gap(args.video, key_ids)
-    except Exception:
+    except Exception as e:
+        print(f"[extra_metrics] MS-SWD computation failed: {e}")
         metrics["MS_SWD_Color"] = float("nan")
 
     with open(args.out_json, "w", encoding="utf-8") as f:
