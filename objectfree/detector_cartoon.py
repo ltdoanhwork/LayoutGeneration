@@ -179,14 +179,8 @@ if __name__ == "__main__":
             print(f"Processed {len(results)} images")
             total_detections = sum(len(r.boxes) for r in results if hasattr(r, 'boxes'))
             print(f"Total detections: {total_detections}")
-
-            # Show first result if available
-            if results and hasattr(results[0], 'show'):
-                print("Showing first result...")
-                results[0].show()
+            print(f"Results saved to: {detector.save_path}")
         else:
             # Single image result
-            if hasattr(results, 'show'):
-                results.show()
-            else:
-                print("Prediction completed. Check output directory for results.")
+            print("Prediction completed. Check output directory for results.")
+            print(f"Results saved to: {detector.save_path}")

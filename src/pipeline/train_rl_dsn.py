@@ -14,6 +14,7 @@ from tqdm import tqdm
 from src.datasets import build_epoch_index, load_scene_dir
 from src.vision_flow import compute_flow_magnitude_robust
 from src.models.dsn import EncoderFC, DSNPolicy
+from src.models.dsn_advanced import DSNAdvanced, DSNConfig
 from src.rl.rewards import reward_combo
 
 # ---------------- utils ---------------- #
@@ -56,10 +57,29 @@ def main():
     ap.add_argument("--device", type=str, default="cuda")
 
     # Model
+    ap.add_argument("--model_type", type=str, default="baseline", choices=["baseline", "advanced"],
+                    help="Model type: baseline (BiLSTM) or advanced (attention+multi-scale)")
     ap.add_argument("--feat_dim", type=int, default=512)
     ap.add_argument("--enc_hidden", type=int, default=256)
     ap.add_argument("--lstm_hidden", type=int, default=128)
     ap.add_argument("--dropout", type=float, default=0.3)
+    
+    # Advanced model hyperparameters (only used if model_type=advanced)
+    ap.add_argument("--num_attn_heads", type=int, default=4,
+                    help="[Advanced] Number of attention heads")
+    ap.add_argument("--num_attn_layers", type=int, default=2,
+                    help="[Advanced] Number of attention layers")
+    ap.add_argument("--num_scales", type=int, default=3,
+                    help="[Advanced] Number of temporal scales (1, 2, 3, or 4)")
+    ap.add_argument("--use_cache", type=int, default=1,
+                    help="[Advanced] Enable feature caching (0 or 1)")
+    ap.add_argument("--cache_size", type=int, default=1000,
+                    help="[Advanced] Max cache size (number of scenes)")
+    ap.add_argument("--pos_encoding_type", type=str, default="sinusoidal",
+                    choices=["sinusoidal", "learned"],
+                    help="[Advanced] Positional encoding type")
+    ap.add_argument("--use_lstm_in_advanced", type=int, default=1,
+                    help="[Advanced] Use LSTM in advanced model (0 or 1, for ablation)")
 
     # RL
     ap.add_argument("--entropy_coef", type=float, default=0.01)
@@ -128,12 +148,38 @@ def main():
     writer = SummaryWriter(log_dir=str(Path(args.log_dir)))
 
     # Model
-    enc = EncoderFC(args.feat_dim, args.enc_hidden).to(device)
-    pol = DSNPolicy(args.enc_hidden, args.lstm_hidden, dropout=args.dropout).to(device)
-    opt = optim.Adam(
-        list(enc.parameters()) + list(pol.parameters()),
-        lr=args.lr, weight_decay=args.weight_decay
-    )
+    if args.model_type == "baseline":
+        print("[Model] Using baseline DSN (BiLSTM)")
+        enc = EncoderFC(args.feat_dim, args.enc_hidden).to(device)
+        pol = DSNPolicy(args.enc_hidden, args.lstm_hidden, dropout=args.dropout).to(device)
+        opt = optim.Adam(
+            list(enc.parameters()) + list(pol.parameters()),
+            lr=args.lr, weight_decay=args.weight_decay
+        )
+        model = None  # Use separate enc/pol
+    elif args.model_type == "advanced":
+        print("[Model] Using advanced DSN (Attention + Multi-Scale)")
+        config = DSNConfig(
+            feat_dim=args.feat_dim,
+            hidden_dim=args.enc_hidden,
+            lstm_hidden=args.lstm_hidden,
+            num_attn_heads=args.num_attn_heads,
+            num_attn_layers=args.num_attn_layers,
+            num_scales=args.num_scales,
+            use_cache=bool(args.use_cache),
+            cache_size=args.cache_size,
+            pos_encoding_type=args.pos_encoding_type,
+            use_lstm=bool(args.use_lstm_in_advanced),
+            dropout=args.dropout
+        )
+        model = DSNAdvanced(config).to(device)
+        opt = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        enc = None  # Not used in advanced mode
+        pol = None
+        print(f"  Config: {config}")
+        print(f"  Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+    else:
+        raise ValueError(f"Unknown model_type: {args.model_type}")
 
     # Baseline for REINFORCE variance reduction
     baseline: Optional[float] = None
@@ -213,8 +259,16 @@ def main():
 
             # to torch
             x = torch.from_numpy(feats).unsqueeze(0).to(device)  # (1,T,D)
-            h = enc(x)                    # (1,T,H)
-            probs = pol(h)                # (1,T) in (0,1)
+            
+            # Forward pass (different for baseline vs advanced)
+            if args.model_type == "baseline":
+                h = enc(x)                    # (1,T,H)
+                probs = pol(h)                # (1,T) in (0,1)
+            else:  # advanced
+                # Extract scene_id for caching
+                scene_id = str(scene_dir).replace('/', '_')
+                probs = model(x, scene_id=scene_id)  # (1,T)
+            
             probs = torch.clamp(probs, 1e-6, 1-1e-6)
 
             # sample actions + stats
@@ -261,10 +315,16 @@ def main():
             opt.zero_grad()
             loss.backward()
             if args.max_grad_norm and args.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    list(enc.parameters()) + list(pol.parameters()),
-                    args.max_grad_norm
-                )
+                if args.model_type == "baseline":
+                    torch.nn.utils.clip_grad_norm_(
+                        list(enc.parameters()) + list(pol.parameters()),
+                        args.max_grad_norm
+                    )
+                else:  # advanced
+                    torch.nn.utils.clip_grad_norm_(
+                        model.parameters(),
+                        args.max_grad_norm
+                    )
             opt.step()
 
             # logging accumulators
