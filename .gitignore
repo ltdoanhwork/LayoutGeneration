@@ -24,3 +24,5 @@ objectfree/annotations/*
 /backup/*
 /yolo_splits/*
 runs/*
+objectfree/weight_model/*
+objectfree/yoloe/*

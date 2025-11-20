@@ -458,13 +458,13 @@ if __name__ == "__main__":
 """
 python -m src.pipeline.train_rl_dsn \
   --dataset_root outputs/sakuga_dataset \
-  --save_dir outputs/dsn_runs/base_v1 \
-  --epochs 10 \
+  --save_dir runs/dsn_baseline_v1_use_motion \
+  --epochs 20 \
   --device cuda:0 \
   --feat_dim 512 --enc_hidden 256 --lstm_hidden 128 \
   --budget_ratio 0.06 --Bmin 3 --Bmax 15 \
   --w_div 1.0 --w_rep 1.0 --w_rec 0.5 --w_fd 0.2 --w_ms 0.2 --w_motion 0.2 \
-  --use_motion 0 --ms_swd_scales 3 --ms_swd_dirs 16 \
+  --use_motion 1 --ms_swd_scales 3 --ms_swd_dirs 16 \
   --val_videos_dir /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga \
   --val_output_dir outputs/val_runs/base_v1 \
   --validate_every 1 \

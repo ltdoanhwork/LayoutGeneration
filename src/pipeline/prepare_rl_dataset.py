@@ -454,8 +454,8 @@ if __name__ == "__main__":
 """
 python -m src.pipeline.prepare_rl_dataset \
   --video_dir /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga \
-  --out_dir outputs/sakuga_dataset \
-  --backend transnetv2  \
+  --out_dir outputs/sakuga_dataset_pyscenedetect \
+  --backend pyscenedetect  \
   --model_dir src/models/TransNetV2 \
   --prob_threshold 0.5 \
   --fps 6 --stride 1 \
@@ -463,6 +463,7 @@ python -m src.pipeline.prepare_rl_dataset \
   --min_scene_len 48 \
   --extractor auto --device cpu \
   --do_flow 0 \
-  --export_preview --preview_which middle
+  --export_preview --preview_which middle \
+  --threshold 27.0
 
 """

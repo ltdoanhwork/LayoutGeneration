@@ -236,6 +236,6 @@ if __name__ == "__main__":
 
 """
 python -m eval.visualize_validation \
-    --val_output_dir outputs/val_runs/test_no_ckpt \
-    --output_dir outputs/val_runs/run1/plots
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/baseline_v1 \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/baseline_v1/plots
 """
