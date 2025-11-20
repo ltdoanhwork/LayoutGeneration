@@ -434,10 +434,28 @@ def main():
             if rejected_grid:
                 grid_tensor = torch.from_numpy(np.array(rejected_grid)).permute(0, 3, 1, 2).float() / 255.0
                 writer.add_images('frames/rejected_frames', grid_tensor, epoch, dataformats='NCHW')
+        
+        # Log cache statistics for advanced model
+        if args.model_type == "advanced" and args.use_cache:
+            cache_stats = model.get_cache_stats()
+            if cache_stats:
+                writer.add_scalar('cache/hit_rate', cache_stats['hit_rate'], epoch)
+                writer.add_scalar('cache/hits', cache_stats['hits'], epoch)
+                writer.add_scalar('cache/misses', cache_stats['misses'], epoch)
+                writer.add_scalar('cache/size', cache_stats['cache_size'], epoch)
+                tqdm.write(f"  Cache: hit_rate={cache_stats['hit_rate']:.2%} "
+                          f"({cache_stats['hits']}/{cache_stats['total_queries']} hits)")
 
         # save ckpt per epoch
         ckpt_path = save_dir / f"dsn_checkpoint_ep{epoch}.pt"
-        torch.save({"encoder": enc.state_dict(), "policy": pol.state_dict()}, ckpt_path)
+        if args.model_type == "baseline":
+            torch.save({"encoder": enc.state_dict(), "policy": pol.state_dict()}, ckpt_path)
+        else:  # advanced
+            torch.save({
+                "model": model.state_dict(),
+                "config": config,
+                "model_type": "advanced"
+            }, ckpt_path)
 
         # validate per epoch
         if args.val_videos_dir and args.val_output_dir and (epoch % args.validate_every == 0):
@@ -506,7 +524,17 @@ def main():
     # end epochs
     epoch_pbar.close()
     writer.close()
-    torch.save({"encoder": enc.state_dict(), "policy": pol.state_dict()}, save_dir / "dsn_checkpoint.pt")
+    
+    # Save final checkpoint
+    if args.model_type == "baseline":
+        torch.save({"encoder": enc.state_dict(), "policy": pol.state_dict()}, save_dir / "dsn_checkpoint.pt")
+    else:  # advanced
+        torch.save({
+            "model": model.state_dict(),
+            "config": config,
+            "model_type": "advanced"
+        }, save_dir / "dsn_checkpoint.pt")
+    
     if best_ckpt_path:
         tqdm.write(f"\n✅ Best checkpoint by RecErr_mean: {best_ckpt_path}")
     tqdm.write("\n🎉 Training done.")
@@ -531,5 +559,7 @@ python -m src.pipeline.train_rl_dsn \
   --eval_embedder clip_vitb32 \
   --eval_backend pyscenedetect --eval_sample_stride 5 --eval_resize_w 320 --eval_resize_h 180 \
   --eval_with_baselines
+
+
 
 """
