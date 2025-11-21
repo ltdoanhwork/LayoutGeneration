@@ -270,7 +270,13 @@ class MultiScaleTemporalEncoder(nn.Module):
         if scale == 0:
             return x
         
+        B, T, D = x.shape
         kernel_size = 2 ** scale
+        
+        # If sequence is too short for this scale, return as-is
+        if T < kernel_size:
+            return x
+        
         x = x.transpose(1, 2)  # (B, D, T)
         
         # Max pooling

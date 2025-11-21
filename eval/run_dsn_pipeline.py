@@ -22,7 +22,7 @@ Example:
   python -m eval.run_dsn_pipeline \
     --video data/samples/Sakuga/14652.mp4 \
     --out_dir outputs/dsn_infer/14652 \
-    --checkpoint outputs/dsn_runs/base_v1/dsn_checkpoint_ep1.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep17.pt \
     --device cuda \
     --feat_dim 512 \
     --enc_hidden 256 \
@@ -49,6 +49,7 @@ import torch.nn.functional as F
 
 from src.scene_detection import create_detector, available_detectors, Scene
 from src.models.dsn import EncoderFC, DSNPolicy
+from src.models.dsn_advanced import DSNAdvanced, DSNConfig
 
 
 # -----------------------------
@@ -347,16 +348,37 @@ def main():
             args.feat_dim = emb_dim
 
     # 3) Load DSN model
-    enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
-    pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
-
+    # Detect model type from checkpoint
+    model_type = "baseline"
+    enc, pol, model = None, None, None
+    
     if args.checkpoint is not None and os.path.isfile(args.checkpoint):
         print(f"[run_dsn_pipeline] Loading checkpoint from {args.checkpoint}")
         ckpt = torch.load(args.checkpoint, map_location=dev)
-        enc.load_state_dict(ckpt["encoder"])
-        pol.load_state_dict(ckpt["policy"])
+        
+        # Check if it's an advanced model checkpoint
+        if "model_type" in ckpt and ckpt["model_type"] == "advanced":
+            model_type = "advanced"
+            print("[run_dsn_pipeline] Detected advanced DSN model")
+            config = ckpt["config"]
+            model = DSNAdvanced(config).to(dev).eval()
+            model.load_state_dict(ckpt["model"])
+            print(f"  Config: {config}")
+            print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+        else:
+            # Baseline model
+            model_type = "baseline"
+            print("[run_dsn_pipeline] Detected baseline DSN model")
+            enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
+            pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
+            enc.load_state_dict(ckpt["encoder"])
+            pol.load_state_dict(ckpt["policy"])
     else:
-        print("[run_dsn_pipeline] No valid checkpoint provided → using randomly initialized DSN (untrained).")
+        # No checkpoint: use baseline
+        print("[run_dsn_pipeline] No valid checkpoint provided → using randomly initialized baseline DSN (untrained).")
+        model_type = "baseline"
+        enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
+        pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
 
     # 4) Per-scene inference
     scene_rows: List[Dict[str, Any]] = []
@@ -383,8 +405,12 @@ def main():
         # Convert to torch, run DSN
         x = torch.from_numpy(feats).unsqueeze(0).to(dev)  # (1, T, D)
         with torch.no_grad():
-            h = enc(x)                  # (1, T, H)
-            probs = pol(h).squeeze(0)   # (T,)
+            if model_type == "baseline":
+                h = enc(x)                  # (1, T, H)
+                probs = pol(h).squeeze(0)   # (T,)
+            else:  # advanced
+                scene_id = f"scene_{sid}"
+                probs = model(x, scene_id=scene_id).squeeze(0)  # (T,)
             probs = torch.clamp(probs, 1e-6, 1 - 1e-6)
         probs_np = probs.cpu().numpy().astype(np.float32)
 

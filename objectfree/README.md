@@ -2,9 +2,12 @@
 
 A comprehensive system for detecting cartoon characters in images and videos using YOLOE (YOLO with Open Vocabulary) and advanced prompt engineering.
 
-## Overview
+## Overv### Output Locations
 
-This system provides:
+Results are saved to:
+- **Detection Results**: `/home/serverai/ltdoanh/LayoutGeneration/outputs/objects_free/`
+- **Annotated Images**: `outputs/objects_free/predict/` subdirectory
+- **No automatic image display** - results are saved silently for pipeline integration provides:
 - **Object Detection**: Detect cartoon characters using YOLOE with custom-trained models
 - **Batch Processing**: Process multiple images or videos with progress monitoring
 - **CUDA Support**: GPU acceleration for faster inference
@@ -61,7 +64,7 @@ model_path: "weight_model/yoloe/weights/best_general.pt"
 input_path: "../data/images/"                           # Input images/videos
 threshold: 0.25                                        # Detection confidence threshold
 prompt: "characters in cartoon"                        # Detection prompt
-save_path: "results"                                   # Output directory
+save_path: "/home/serverai/ltdoanh/LayoutGeneration/outputs/objects_free"  # Output directory
 type_content: "image"                                  # 'image' or 'video'
 device: "cuda"                                         # 'cuda' or 'cpu'
 pe_path: "weight_model/character-pe.pt"               # Prompt embeddings

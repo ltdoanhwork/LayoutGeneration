@@ -42,10 +42,6 @@ from src.keyframe.medoid_selector import (
 
 from src.keyframe.random_selector import RandomSelector
 
-from objectfree.inference_dino import LoadDetector
-from objectfree.story_coherence_evaluator import StoryCoherenceEvaluator
-from objectfree.eval_comprehensive import ImageRegionAnalyzer
-from objectfree.eval_objectfree import CompletePipeline
 
 # ------------------------------
 # Basic I/O helpers
@@ -147,23 +143,51 @@ def export_keyframe_images(
 
 
 # ------------------------------
-# Object-Free Pipeline Integration
+# Cartoon Character Detection Integration
 # ------------------------------
-def run_complete_object_free_pipeline(keyframes_folder, output_base, device="cuda", config_path="objectfree/config.yaml", checkpoint_path="./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt"):
-    """Run complete object-free pipeline using CompletePipeline class"""
-    
-    # Initialize pipeline
-    pipeline = CompletePipeline(device=device, output_dir=output_base, config_path=config_path)
-    pipeline.initialize_detectors()
-    
-    # Override config and checkpoint paths
-    pipeline.object_detector.config_path = config_path
-    pipeline.object_detector.checkpoint_path = checkpoint_path
-    
-    # Process the folder
-    result = pipeline.process_single_folder(keyframes_folder, output_base)
-    
-    return result
+def run_cartoon_detection_pipeline(keyframes_folder, output_base, device="cuda", config_path="objectfree/detector_config.yaml"):
+    """Run cartoon character detection using DetectorCartoon class"""
+
+    # Import detector
+    from objectfree.detector_cartoon import DetectorCartoon
+
+    # Initialize detector
+    detector = DetectorCartoon(config_path=config_path)
+
+    # Update input path to keyframes folder for batch processing
+    detector.input_path = keyframes_folder
+    detector.type_content = "image"  # Process images
+
+    # Update save path to output directory
+    detector.save_path = output_base
+
+    # Run detection
+    results = detector.forward(save_results=True)
+
+    # Return results summary
+    if isinstance(results, list):
+        if not results:
+            return {
+                "output_dir": output_base,
+                "total_images": 0,
+                "total_detections": 0,
+                "results": []
+            }
+        total_detections = sum(len(r.boxes) for r in results if hasattr(r, 'boxes'))
+        return {
+            "output_dir": output_base,
+            "total_images": len(results),
+            "total_detections": total_detections,
+            "results": results
+        }
+    else:
+        total_detections = len(results.boxes) if hasattr(results, 'boxes') else 0
+        return {
+            "output_dir": output_base,
+            "total_images": 1,
+            "total_detections": total_detections,
+            "results": results
+        }
 def normalize_and_merge_scenes(
     scenes: List[Scene],
     min_len_frames: int = 0,
@@ -278,15 +302,13 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--key_jpeg_quality", type=int, default=95,
                     help="JPEG quality for exported keyframe images.")
 
-    # Object-free pipeline
+    # Cartoon character detection
     ap.add_argument("--run_object_free_pipeline", action="store_true",
-                    help="Run complete object-free evaluation pipeline after keyframe extraction.")
+                    help="Run cartoon character detection on extracted keyframes.")
     ap.add_argument("--detection_config", type=str, default=None,
-                    help="Path to Grounding DINO config file for object detection.")
-    ap.add_argument("--detection_checkpoint", type=str, default=None,
-                    help="Path to Grounding DINO checkpoint file.")
+                    help="Path to cartoon detection config file (default: objectfree/detector_config.yaml).")
     ap.add_argument("--detection_device", type=str, default=None,
-                    help="Device for object detection ('cuda'/'cpu').")
+                    help="Device for cartoon detection ('cuda'/'cpu').")
 
     return ap
 
@@ -417,38 +439,38 @@ def main():
         jpeg_quality=args.key_jpeg_quality,
     )
 
-    # Run complete object-free pipeline (optional)
-    object_free_results = None
+    # Run cartoon character detection pipeline (optional)
+    detection_results = None
     if args.run_object_free_pipeline:
         print("\n" + "="*80)
-        print("RUNNING COMPLETE OBJECT-FREE PIPELINE")
+        print("RUNNING CARTOON CHARACTER DETECTION")
         print("="*80)
-        
-        # Determine device for object-free pipeline
-        of_device_str = args.detection_device or args.distance_device or "cuda"
-        
-        # Create base output directory for object-free results
-        of_base_dir = os.path.join(args.out_dir, "object_free_evaluation")
-        ensure_dir(of_base_dir)
-        
+
+        # Determine device for detection
+        detection_device_str = args.detection_device or args.distance_device or "cuda"
+
+        # Create base output directory for detection results
+        detection_base_dir = os.path.join(args.out_dir, "cartoon_detection")
+        ensure_dir(detection_base_dir)
+
         try:
-            object_free_results = run_complete_object_free_pipeline(
+            detection_results = run_cartoon_detection_pipeline(
                 keyframes_folder=key_dir,
-                output_base=of_base_dir,
-                device=of_device_str,
-                config_path=args.detection_config,
-                checkpoint_path=args.detection_checkpoint
+                output_base=detection_base_dir,
+                device=detection_device_str,
+                config_path=args.detection_config or "objectfree/detector_config.yaml"
             )
-            
-            if object_free_results:
-                print(f"\n[SUCCESS] Object-free pipeline completed!")
-                print(f"  • Results: {object_free_results['output_dir']}")
-                print(f"  • Final report: {os.path.join(object_free_results['output_dir'], 'final_report.json')}")
+
+            if detection_results:
+                print(f"\n[SUCCESS] Cartoon detection completed!")
+                print(f"  • Results: {detection_results['output_dir']}")
+                print(f"  • Images processed: {detection_results['total_images']}")
+                print(f"  • Total detections: {detection_results['total_detections']}")
             else:
-                print(f"[WARN] Object-free pipeline failed!")
-                
+                print(f"[WARN] Cartoon detection failed!")
+
         except Exception as e:
-            print(f"[ERROR] Object-free pipeline failed: {e}")
+            print(f"[ERROR] Cartoon detection failed: {e}")
             import traceback
             traceback.print_exc()
 
@@ -460,8 +482,8 @@ def main():
     if args.export_preview:
         print(f"  • Scene previews: {preview_dir}")
     print(f"  • Keyframe images: {key_dir}")
-    if args.run_object_free_pipeline and object_free_results:
-        print(f"  • Object-free evaluation: {object_free_results['output_dir']}")
+    if args.run_object_free_pipeline and detection_results:
+        print(f"  • Cartoon detection: {detection_results['output_dir']}")
     print("="*60)
 if __name__ == "__main__":
     main()
@@ -557,7 +579,7 @@ python pipeline.py \
   --resize_w 320 --resize_h 180 \
   --out_dir outputs/run_tv2_dists
 
-# 3) With Object-Free Pipeline
+# 3) With Cartoon Character Detection
 python pipeline.py \
   --video ./data/samples/Sakuga/6261.mp4 \
   --backend pyscenedetect --threshold 27 \
@@ -565,11 +587,11 @@ python pipeline.py \
   --sample_stride 10 --max_frames_per_scene 30 \
   --keyframes_per_scene 1 --nms_radius 3 \
   --resize_w 320 --resize_h 180 \
-  --out_dir outputs/run_with_object_free \
+  --out_dir outputs/run_with_cartoon_detection \
   --export_preview \
   --run_object_free_pipeline \
-  --detection_config objectfree/config.yaml \
-  --detection_checkpoint ./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt
+  --detection_config objectfree/detector_config.yaml \
+  --detection_device cuda
 """
 
 ## transnet v2 + lpips 
@@ -599,3 +621,10 @@ python -m pipeline \
   --keyframes_per_scene 2 --nms_radius 4 \
   --resize_w 320 --resize_h 180 \
   --out_dir data/outputs/run_tv2_dists """
+
+
+
+######### New with object free by yoloe ######
+"""
+python /home/serverai/ltdoanh/LayoutGeneration/pipeline.py --video "/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/39778.mp4" --backend transnetv2 --model_dir /home/serverai/ltdoanh/LayoutGeneration/src/models/TransNetV2 --distance_backend lpips --lpips_net alex --sample_stride 10 --max_frames_per_scene 30 --keyframes_per_scene 1 --nms_radius 3 --resize_w 320 --resize_h 180 --out_dir outputs/test_transnetv2_h264 --export_preview --run_object_free_pipeline --detection_config /home/serverai/ltdoanh/LayoutGeneration/objectfree/detector_config.yaml --detection_device cuda
+"""

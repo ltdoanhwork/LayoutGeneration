@@ -99,7 +99,8 @@ class DetectorCartoon:
                     source=self.input_path,
                     conf=self.threshold,
                     save=save_dir is not None,
-                    save_dir=save_dir,
+                    project=save_dir,
+                    name="",
                     stream=False,  # Single image, no need for stream
                     device=self.device
                 )
@@ -119,6 +120,11 @@ class DetectorCartoon:
                 for f in os.listdir(folder_path)
                 if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))
             ]
+
+            if not all_image_paths:
+                print(f"No image files found in {folder_path}")
+                return []
+
             # Limit number of images for testing
             image_paths = all_image_paths[:max_images]
             print(f"Processing {len(image_paths)} out of {len(all_image_paths)} images")
@@ -131,7 +137,8 @@ class DetectorCartoon:
             source=image_paths,
             conf=self.threshold,
             save=save_dir is not None,
-            save_dir=save_dir,
+            project=save_dir,
+            name="",
             stream=True,  # Keep stream for batch processing
             device=self.device
         )
@@ -153,7 +160,8 @@ class DetectorCartoon:
             source=self.input_path,
             conf=self.threshold,
             save=save_dir is not None,
-            save_dir=save_dir,
+            project=save_dir,
+            name="",
             stream=True,
             device=self.device
         )

@@ -236,6 +236,6 @@ if __name__ == "__main__":
 
 """
 python -m eval.visualize_validation \
-    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/baseline_v1 \
-    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/baseline_v1/plots
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/outputs/val_runs/advanced_v1 \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/plots
 """

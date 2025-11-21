@@ -9,8 +9,8 @@ conda activate sam
 python -m src.pipeline.train_rl_dsn \
   --model_type advanced \
   --dataset_root outputs/sakuga_dataset \
-  --save_dir runs/dsn_advanced_v1 \
-  --log_dir runs/dsn_advanced_v1 \
+  --save_dir runs/dsn_advanced_v1_no_motion \
+  --log_dir runs/dsn_advanced_v1_no_motion \
   --epochs 20 \
   --device cuda:0 \
   \
@@ -38,7 +38,7 @@ python -m src.pipeline.train_rl_dsn \
   --w_fd 0.2 \
   --w_ms 0.2 \
   --w_motion 0.2 \
-  --use_motion 1 \
+  --use_motion 0 \
   --ms_swd_scales 3 \
   --ms_swd_dirs 16 \
   \
@@ -49,10 +49,10 @@ python -m src.pipeline.train_rl_dsn \
   --baseline_momentum 0.9 \
   \
   --val_videos_dir data/samples/Sakuga \
-  --val_output_dir outputs/val_runs/advanced_v1 \
+  --val_output_dir runs/val_runs/advanced_v1_no_motion \
   --validate_every 1 \
   --eval_embedder clip_vitb32 \
-  --eval_backend pyscenedetect \
+  --eval_backend transnetv2 \
   --eval_sample_stride 5 \
   --eval_resize_w 320 \
   --eval_resize_h 180 \

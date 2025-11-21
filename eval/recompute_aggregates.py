@@ -4,7 +4,7 @@
 Recompute aggregate metrics from existing summary_results.json
 
 Usage:
-    python -m eval.recompute_aggregates --summary /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_baseline_v1/baseline_v1/ep20/summary_results.json
+    python -m eval.recompute_aggregates --summary /home/serverai/ltdoanh/LayoutGeneration/outputs/val_runs/advanced_v1/ep1/summary_results.json
 """
 import json
 import argparse

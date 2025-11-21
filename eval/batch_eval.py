@@ -343,5 +343,6 @@ python -m eval.batch_eval \
     --eval_tau 0.5 \
     --with_baselines \
     --debug \
-    --limit 1
+    --limit 1\
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep17.pt
 """

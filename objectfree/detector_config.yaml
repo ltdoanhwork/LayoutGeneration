@@ -2,7 +2,7 @@ model_path: "weight_model/yoloe/weights/best_general.pt"
 input_path: "../create_mask_for_user/U-2-Net/test_data/u2netp_results/rifle1.png"
 threshold: 0.2
 prompt: "characters in cartoon"
-save_path: "../outputs"
+save_path: "/home/serverai/ltdoanh/LayoutGeneration/outputs/objects_free"
 type_content: "image"  # 'image' or 'video'
 device: "cuda"  # 'cuda' or 'cpu'
 pe_path: "weight_model/character-pe.pt"
