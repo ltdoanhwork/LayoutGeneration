@@ -22,7 +22,7 @@ Example:
   python -m eval.run_dsn_pipeline \
     --video data/samples/Sakuga/14652.mp4 \
     --out_dir outputs/dsn_infer/14652 \
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep17.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep2.pt \
     --device cuda \
     --feat_dim 512 \
     --enc_hidden 256 \
@@ -383,6 +383,7 @@ def main():
     # 4) Per-scene inference
     scene_rows: List[Dict[str, Any]] = []
     key_rows: List[Dict[str, Any]] = []
+    all_prob_rows: List[Dict[str, Any]] = []  # Store ALL frame probabilities for visualization
 
     resize_tuple = (args.resize_w, args.resize_h)
 
@@ -421,7 +422,22 @@ def main():
             Bmin=args.Bmin,
             Bmax=args.Bmax,
         )
+        
+        # Save ALL frame probabilities (for visualization)
+        for li in range(len(frames)):
+            gi = gidx[li]
+            all_prob_rows.append(
+                {
+                    "scene_id": sid,
+                    "frame_global": int(gi),
+                    "frame_in_scene": int(li),
+                    "time": timecode_from_frame(gi, fps),
+                    "prob": float(probs_np[li]),
+                    "selected": int(li in sel_local),  # 1 if selected, 0 otherwise
+                }
+            )
 
+        # Save only selected keyframes
         for li in sel_local:
             gi = gidx[li]
             key_rows.append(
@@ -458,10 +474,20 @@ def main():
         writer.writeheader()
         for r in key_rows:
             writer.writerow(r)
+    
+    # Save ALL frame probabilities for visualization
+    with open(out_dir / "all_probs.csv", "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["scene_id", "frame_global", "frame_in_scene", "time", "prob", "selected"],
+        )
+        writer.writeheader()
+        for r in all_prob_rows:
+            writer.writerow(r)
 
     print(
         f"[run_dsn_pipeline] Done for {video_path}. "
-        f"Scenes={len(scene_rows)}, Keys={len(key_rows)} -> {out_dir}"
+        f"Scenes={len(scene_rows)}, Keys={len(key_rows)}, All frames={len(all_prob_rows)} -> {out_dir}"
     )
 
 
