@@ -22,7 +22,7 @@ Example:
   python -m eval.run_dsn_pipeline \
     --video data/samples/Sakuga/14652.mp4 \
     --out_dir outputs/dsn_infer/14652 \
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep2.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion/dsn_checkpoint_ep15.pt \
     --device cuda \
     --feat_dim 512 \
     --enc_hidden 256 \
@@ -30,7 +30,7 @@ Example:
     --budget_ratio 0.06 --Bmin 3 --Bmax 15 \
     --sample_stride 5 \
     --resize_w 320 --resize_h 180 \
-    --backend pyscenedetect --threshold 27 \
+    --backend transnetv2 --threshold 27 \
     --embedder clip_vitb32
 """
 
@@ -282,10 +282,10 @@ def main():
         choices=available_detectors(),
     )
     parser.add_argument("--threshold", type=float, default=None, help="[pyscenedetect] ContentDetector threshold.")
-    parser.add_argument("--model_dir", type=str, default=None, help="[transnetv2] directory with weights/")
+    parser.add_argument("--model_dir", type=str, default='./src/models/TransNetV2', help="[transnetv2] directory with weights/")
     parser.add_argument("--weights_path", type=str, default=None, help="[transnetv2] direct .pth path (override model_dir)")
-    parser.add_argument("--prob_threshold", type=float, default=None, help="[transnetv2] boundary probability threshold.")
-    parser.add_argument("--scene_device", type=str, default=None, help="[transnetv2] device for model ('cuda'/'cpu').")
+    parser.add_argument("--prob_threshold", type=float, default=0.5, help="[transnetv2] boundary probability threshold.")
+    parser.add_argument("--scene_device", type=str, default="cuda", help="[transnetv2] device for model ('cuda'/'cpu').")
 
     # Embedder
     parser.add_argument(

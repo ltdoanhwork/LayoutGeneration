@@ -8,9 +8,9 @@ conda activate sam
 # Training command for Advanced DSN
 python -m src.pipeline.train_rl_dsn \
   --model_type advanced \
-  --dataset_root outputs/sakuga_dataset \
-  --save_dir runs/dsn_advanced_v1_no_motion \
-  --log_dir runs/dsn_advanced_v1_no_motion \
+  --dataset_root /home/serverai/ltdoanh/LayoutGeneration/data/sakuga_dataset_100_samples \
+  --save_dir runs/dsn_advanced_v1_no_motion_100_samples \
+  --log_dir runs/dsn_advanced_v1_no_motion_100_samples \
   --epochs 20 \
   --device cuda:0 \
   \
@@ -48,8 +48,8 @@ python -m src.pipeline.train_rl_dsn \
   --entropy_coef 0.01 \
   --baseline_momentum 0.9 \
   \
-  --val_videos_dir data/samples/Sakuga \
-  --val_output_dir runs/val_runs/advanced_v1_no_motion \
+  --val_videos_dir /home/serverai/ltdoanh/LayoutGeneration/data/samples/vssum \
+  --val_output_dir runs/dsn_advanced_v1_no_motion_100_samples \
   --validate_every 1 \
   --eval_embedder clip_vitb32 \
   --eval_backend transnetv2 \
@@ -59,4 +59,4 @@ python -m src.pipeline.train_rl_dsn \
   --eval_with_baselines
 
 echo "Training completed! Check TensorBoard for results:"
-echo "tensorboard --logdir runs/dsn_advanced_v1/"
+echo "tensorboard --logdir runs/dsn_advanced_v1_no_motion_100_samples/"

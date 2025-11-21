@@ -22,23 +22,21 @@ class TransNetV2Detector(SceneDetector):
     def _lazy_load(self):
         if self._model is not None:
             return
-        try:
-            model_dir = self.params.get("model_dir")
-            if not model_dir:
-                raise ValueError("Missing 'model_dir' for TransNetV2Detector.")
+        model_dir = self.params.get("model_dir")
+        if not model_dir:
+            raise ValueError("Missing 'model_dir' for TransNetV2Detector.")
 
-            device = self.params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
+        device = self.params.get("device", "cuda" if torch.cuda.is_available() else "cpu")
 
-            weights_path = os.path.join(os.path.expanduser(model_dir), "inference_pytorch", "transnetv2-pytorch-weights.pth")
+        weights_path = os.path.join(os.path.expanduser(model_dir), "inference_pytorch", "transnetv2-pytorch-weights.pth")
 
-            self._model = TransNetV2()
-            state_dict = torch.load(weights_path)
-            self._model.load_state_dict(state_dict)
-            self._model.eval().to(device)
-            self._device = device
+        self._model = TransNetV2()
+        state_dict = torch.load(weights_path)
+        self._model.load_state_dict(state_dict)
+        self._model.eval().to(device)
+        self._device = device
             
-        except Exception as e:
-            raise RuntimeError("Error loading TransNetV2 PyTorch model") from e
+        
 
     def detect(self, video_path: str) -> Scenes:
         self._lazy_load()
