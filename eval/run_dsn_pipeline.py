@@ -22,13 +22,13 @@ Example:
   python -m eval.run_dsn_pipeline \
     --video data/samples/Sakuga/14652.mp4 \
     --out_dir outputs/dsn_infer/14652 \
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion/dsn_checkpoint_ep15.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples/dsn_checkpoint_ep8.pt \
     --device cuda \
     --feat_dim 512 \
     --enc_hidden 256 \
     --lstm_hidden 128 \
     --budget_ratio 0.06 --Bmin 3 --Bmax 15 \
-    --sample_stride 5 \
+    --sample_stride 1 \
     --resize_w 320 --resize_h 180 \
     --backend transnetv2 --threshold 27 \
     --embedder clip_vitb32

@@ -37,6 +37,11 @@ class DSNConfig:
     hidden_dim: int = 256
     lstm_hidden: int = 128
     
+    # Motion features (optional)
+    use_motion: bool = False
+    motion_dim: int = 128
+    motion_fusion_type: str = "cross_attention"  # "cross_attention", "simple"
+    
     # Attention parameters
     num_attn_heads: int = 4
     num_attn_layers: int = 2
@@ -541,6 +546,7 @@ class EncoderFCAdvanced(nn.Module):
 class DSNPolicyAdvanced(nn.Module):
     """
     Advanced policy network with:
+    - Optional motion fusion via cross-attention
     - Positional encoding
     - Multi-scale temporal modeling
     - Self-attention layers
@@ -551,6 +557,31 @@ class DSNPolicyAdvanced(nn.Module):
     def __init__(self, config: DSNConfig):
         super().__init__()
         self.config = config
+        
+        # Motion fusion (optional)
+        self.use_motion = config.use_motion
+        if config.use_motion:
+            from src.models.motion_fusion import MotionCrossAttention, SimpleMotionFusion
+            
+            if config.motion_fusion_type == "cross_attention":
+                self.motion_fusion = MotionCrossAttention(
+                    motion_dim=config.motion_dim,
+                    clip_dim=config.hidden_dim,
+                    output_dim=config.hidden_dim,
+                    num_heads=config.num_attn_heads,
+                    dropout=config.dropout
+                )
+            elif config.motion_fusion_type == "simple":
+                self.motion_fusion = SimpleMotionFusion(
+                    motion_dim=config.motion_dim,
+                    clip_dim=config.hidden_dim,
+                    output_dim=config.hidden_dim,
+                    dropout=config.dropout
+                )
+            else:
+                raise ValueError(f"Unknown motion_fusion_type: {config.motion_fusion_type}")
+        else:
+            self.motion_fusion = None
         
         # Positional encoding
         if config.pos_encoding_type == "sinusoidal":
@@ -596,13 +627,18 @@ class DSNPolicyAdvanced(nn.Module):
         # Output head
         self.head = nn.Linear(lstm_out_dim, 1)
     
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
+    def forward(self, h: torch.Tensor, motion_feats: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
-            h: (B, T, H) hidden features from encoder
+            h: (B, T, H) hidden features from encoder (CLIP features)
+            motion_feats: Optional (B, T, D_m) motion features from RAFT
         Returns:
             probs: (B, T) selection probabilities
         """
+        # Motion fusion (if enabled and motion features provided)
+        if self.use_motion and motion_feats is not None and self.motion_fusion is not None:
+            h = self.motion_fusion(motion_feats, h)  # Cross-attention: motion attends to CLIP
+        
         # Positional encoding
         if self.pos_encoder is not None:
             h = self.pos_encoder(h)
@@ -655,16 +691,18 @@ class DSNAdvanced(nn.Module):
         # Policy
         self.policy = DSNPolicyAdvanced(config)
     
-    def forward(self, x: torch.Tensor, scene_id: Optional[str] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, scene_id: Optional[str] = None, 
+                motion_feats: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
-            x: (B, T, D) input features
+            x: (B, T, D) input CLIP features
             scene_id: Optional scene ID for caching
+            motion_feats: Optional (B, T, D_m) motion features from RAFT
         Returns:
             probs: (B, T) selection probabilities
         """
         h = self.encoder(x, scene_id)
-        probs = self.policy(h)
+        probs = self.policy(h, motion_feats)
         return probs
     
     def get_cache_stats(self) -> Optional[Dict[str, int]]:

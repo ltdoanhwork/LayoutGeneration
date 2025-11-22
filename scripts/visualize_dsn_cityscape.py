@@ -366,7 +366,7 @@ python scripts/visualize_dsn_cityscape.py \
 
 # Tạo cả 2 loại
 python scripts/visualize_dsn_cityscape.py \
-    --keyframes outputs/dsn_infer/14652/keyframes.csv \
-    --scenes outputs/dsn_infer/14652/scenes.json \
+    --keyframes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples/ep1/pipeline_results/v12/keyframes.csv \
+    --scenes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples/ep1/pipeline_results/v12/scenes.json \
     --style both
 """

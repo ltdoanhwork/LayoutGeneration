@@ -214,23 +214,11 @@ class FeatureExtractor:
             return self._extract_classic(frames)
 
 # ================
-# Optical Flow (TV-L1)
+# Optical Flow - DEPRECATED
 # ================
-def compute_tvl1_flow_magnitude(frames: List[np.ndarray]) -> np.ndarray:
-    assert cv2 is not None, "OpenCV required."
-    tvl1 = cv2.optflow.DualTVL1OpticalFlow_create()
-    mags = []
-    for t in range(len(frames) - 1):
-        a = frames[t]; b = frames[t + 1]
-        ga = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-        gb = cv2.cvtColor(b, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-        flow = tvl1.calc(ga, gb, None)
-        mag = np.sqrt(flow[..., 0] ** 2 + flow[..., 1] ** 2).mean()
-        mags.append(float(mag))
-    if len(mags) == 0:
-        return np.zeros((len(frames),), np.float32)
-    mags.append(mags[-1])
-    return np.array(mags, dtype=np.float32)
+# NOTE: Optical flow computation has been moved to RAFT precomputation.
+# Use scripts/precompute_raft_motion.py instead.
+# This function is kept for backward compatibility but not used in the pipeline.
 
 # =========
 # Save scene
@@ -240,19 +228,17 @@ def save_scene(out_root: Path,
                scene_id: int,
                frames: List[np.ndarray],
                feats: np.ndarray,
-               flow: Optional[np.ndarray],
                meta: Dict[str, Any],
                jpeg_quality: int = 85):
+    """Save scene data (frames, features, metadata). Flow is deprecated."""
     scene_dir = out_root / video_stem / f"scene_{scene_id:04d}"
     ensure_dir(scene_dir / "frames")
     # Save frames
     for i, im in enumerate(frames):
         cv2.imwrite(str(scene_dir / "frames" / f"{i:06d}.jpg"),
                     im, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
-    # Save feats / flow
+    # Save feats
     np.save(scene_dir / "feats.npy", feats)
-    if flow is not None:
-        np.save(scene_dir / "flow.npy", flow)
     # Save meta
     with open(scene_dir / "meta.json", "w") as f:
         json.dump(meta, f, indent=2)
@@ -303,10 +289,9 @@ def main():
     ap.add_argument("--extractor", type=str, default="auto",
                     choices=["auto","clip","classic"])
     ap.add_argument("--device", type=str, default="cuda:0")
-    # Optical flow
-    ap.add_argument("--do_flow", type=int, default=0)
     # JPEG saving
     ap.add_argument("--save_jpeg_quality", type=int, default=85)
+    # NOTE: --do_flow has been removed. Use scripts/precompute_raft_motion.py for motion features.
     args = ap.parse_args()
 
     out_root = Path(args.out_dir)
@@ -424,8 +409,7 @@ def main():
             # Features
             feats = extractor(sub)
 
-            # Optional TV-L1 flow
-            flow = compute_tvl1_flow_magnitude(sub) if (args.do_flow and cv2 is not None) else None
+            # NOTE: Flow computation removed. Use scripts/precompute_raft_motion.py instead.
 
             meta = dict(
                 video=str(video_path),
@@ -441,9 +425,8 @@ def main():
                 resize_w=int(args.resize_w),
                 resize_h=int(args.resize_h),
                 extractor=args.extractor,
-                do_flow=bool(args.do_flow),
             )
-            save_scene(out_root, video_stem, sid, sub, feats, flow, meta, jpeg_quality=args.save_jpeg_quality)
+            save_scene(out_root, video_stem, sid, sub, feats, meta, jpeg_quality=args.save_jpeg_quality)
             log(f"  scene {sid:04d}: T={len(sub)} D={feats.shape[1]} saved.")
 
     log("All done.")
@@ -462,8 +445,8 @@ python -m src.pipeline.prepare_rl_dataset \
   --resize_w 0 --resize_h 0 \
   --min_scene_len 48 \
   --extractor auto --device cuda \
-  --do_flow 0 \
   --export_preview --preview_which middle \
   --threshold 27.0
 
+NOTE: For motion features, use scripts/precompute_raft_motion.py after running this script.
 """

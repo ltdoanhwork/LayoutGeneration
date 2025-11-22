@@ -80,6 +80,15 @@ def main():
                     help="[Advanced] Positional encoding type")
     ap.add_argument("--use_lstm_in_advanced", type=int, default=1,
                     help="[Advanced] Use LSTM in advanced model (0 or 1, for ablation)")
+    
+    # RAFT Motion features
+    ap.add_argument("--use_raft_motion", type=int, default=0,
+                    help="Use precomputed RAFT motion features (0 or 1)")
+    ap.add_argument("--motion_dim", type=int, default=128,
+                    help="Motion feature dimension")
+    ap.add_argument("--motion_fusion_type", type=str, default="cross_attention",
+                    choices=["cross_attention", "simple"],
+                    help="Motion fusion type")
 
     # RL
     ap.add_argument("--entropy_coef", type=float, default=0.01)
@@ -170,7 +179,11 @@ def main():
             cache_size=args.cache_size,
             pos_encoding_type=args.pos_encoding_type,
             use_lstm=bool(args.use_lstm_in_advanced),
-            dropout=args.dropout
+            dropout=args.dropout,
+            # RAFT motion
+            use_motion=bool(args.use_raft_motion),
+            motion_dim=args.motion_dim,
+            motion_fusion_type=args.motion_fusion_type
         )
         model = DSNAdvanced(config).to(device)
         opt = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -238,14 +251,19 @@ def main():
         scene_pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}", leave=False, position=1)
         
         for scene_dir in scene_pbar:
-            sample = load_scene_dir(scene_dir, load_frames=True)  # frames needed for MS-SWD
+            # Load scene data with optional RAFT motion
+            load_motion = bool(args.use_raft_motion) and args.model_type == "advanced"
+            sample = load_scene_dir(scene_dir, load_frames=True, load_motion=load_motion)
             feats = l2_normalize(sample.feats.astype(np.float32), axis=1)
             frames = sample.frames
             T, D = feats.shape
             if T < 2:
                 continue
 
-            # motion (optional)
+            # RAFT motion features (precomputed)
+            motion_feats_np = sample.motion  # (T, D_m) or None
+            
+            # Old motion for reward computation (if enabled)
             motion = None
             if args.use_motion and (frames is not None) and (len(frames) > 1):
                 try:
@@ -260,6 +278,11 @@ def main():
             # to torch
             x = torch.from_numpy(feats).unsqueeze(0).to(device)  # (1,T,D)
             
+            # RAFT motion to torch (if available)
+            motion_feats = None
+            if motion_feats_np is not None:
+                motion_feats = torch.from_numpy(motion_feats_np.astype(np.float32)).unsqueeze(0).to(device)  # (1,T,D_m)
+            
             # Forward pass (different for baseline vs advanced)
             if args.model_type == "baseline":
                 h = enc(x)                    # (1,T,H)
@@ -267,7 +290,7 @@ def main():
             else:  # advanced
                 # Extract scene_id for caching
                 scene_id = str(scene_dir).replace('/', '_')
-                probs = model(x, scene_id=scene_id)  # (1,T)
+                probs = model(x, scene_id=scene_id, motion_feats=motion_feats)  # (1,T)
             
             probs = torch.clamp(probs, 1e-6, 1-1e-6)
 
@@ -559,7 +582,4 @@ python -m src.pipeline.train_rl_dsn \
   --eval_embedder clip_vitb32 \
   --eval_backend pyscenedetect --eval_sample_stride 5 --eval_resize_w 320 --eval_resize_h 180 \
   --eval_with_baselines
-
-
-
 """
