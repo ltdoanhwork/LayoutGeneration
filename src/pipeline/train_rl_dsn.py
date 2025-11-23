@@ -90,6 +90,14 @@ def main():
                     choices=["cross_attention", "simple"],
                     help="Motion fusion type")
 
+    # Anime-CLIP-IQA
+    ap.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes as features")
+    ap.add_argument("--anime_attrs_dim", type=int, default=0, help="Dimension of anime attributes")
+    ap.add_argument("--use_anime_reward", type=int, default=0, help="Use Anime-CLIP-IQA based rewards")
+    ap.add_argument("--w_look",   type=float, default=0.0)
+    ap.add_argument("--w_sakuga", type=float, default=0.0)
+    ap.add_argument("--w_story",  type=float, default=0.0)
+
     # RL
     ap.add_argument("--entropy_coef", type=float, default=0.01)
     ap.add_argument("--baseline_momentum", type=float, default=0.9)
@@ -258,8 +266,22 @@ def main():
         for scene_dir in scene_pbar:
             # Load scene data with optional RAFT motion
             load_motion = bool(args.use_raft_motion) and args.model_type == "advanced"
-            sample = load_scene_dir(scene_dir, load_frames=True, load_motion=load_motion)
-            feats = l2_normalize(sample.feats.astype(np.float32), axis=1)
+            load_anime_attrs = bool(args.use_anime_attrs) or bool(args.use_anime_reward)
+            sample = load_scene_dir(scene_dir, load_frames=True, load_motion=load_motion, load_anime_attrs=load_anime_attrs)
+            
+            # Track A: Feature concatenation
+            feats_clip = sample.feats.astype(np.float32)
+            if args.use_anime_attrs and (sample.anime_attrs is not None):
+                attrs = sample.anime_attrs.astype(np.float32)
+                # align T
+                T_clip = len(feats_clip)
+                T_attrs = len(attrs)
+                T = min(T_clip, T_attrs)
+                feats = np.concatenate([feats_clip[:T], attrs[:T]], axis=1)
+            else:
+                feats = feats_clip
+            
+            feats = l2_normalize(feats, axis=1)
             frames = sample.frames
             T, D = feats.shape
             if T < 2:
@@ -320,6 +342,44 @@ def main():
                 lpips_net=args.lpips_net,
                 lpips_device=args.lpips_device,
             )
+
+            # Track B: Anime-based rewards
+            if args.use_anime_reward and (sample.anime_attrs is not None) and len(sel_idx) > 0:
+                attrs = sample.anime_attrs  # (T, K)
+                sel_idx_valid = [i for i in sel_idx if i < len(attrs)]
+                if sel_idx_valid:
+                    sel_attrs = attrs[sel_idx_valid]  # (S, K)
+                    # 0=sharp, 1=colorful, 2=bright, 3=sakuga, 4=cinematic, 5=expr
+                    q_sharp = sel_attrs[:, 0]
+                    q_color = sel_attrs[:, 1]
+                    q_bright = sel_attrs[:, 2]
+                    a_sakuga = sel_attrs[:, 3]
+                    a_cinema = sel_attrs[:, 4]
+
+                    # R_look
+                    R_look = float(
+                        (q_sharp.mean() + q_color.mean() + q_bright.mean()) / 3.0
+                    )
+
+                    # R_sakuga
+                    if motion is not None:
+                        m = np.array(motion[:len(attrs)], dtype=np.float32)
+                        m = (m - m.min()) / (m.max() - m.min() + 1e-8)
+                        sel_m = m[sel_idx_valid]
+                        R_sakuga = float(0.5 * a_sakuga.mean() + 0.5 * sel_m.mean())
+                    else:
+                        R_sakuga = float(a_sakuga.mean())
+
+                    # R_story (beat coverage)
+                    beat = 0.5 * a_sakuga + 0.5 * a_cinema  # (T,)
+                    thr = float(beat.mean() + 0.5 * beat.std())
+                    sel_beat = beat[sel_idx_valid]
+                    if len(sel_beat) > 0:
+                        R_story = float((sel_beat > thr).mean())
+                    else:
+                        R_story = 0.0
+
+                    R += args.w_look * R_look + args.w_sakuga * R_sakuga + args.w_story * R_story
 
             # budget penalty
             if B_target > 0:
