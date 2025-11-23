@@ -626,5 +626,5 @@ python -m pipeline \
 
 ######### New with object free by yoloe ######
 """
-python /home/serverai/ltdoanh/LayoutGeneration/pipeline.py --video "/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/39778.mp4" --backend transnetv2 --model_dir /home/serverai/ltdoanh/LayoutGeneration/src/models/TransNetV2 --distance_backend lpips --lpips_net alex --sample_stride 10 --max_frames_per_scene 30 --keyframes_per_scene 1 --nms_radius 3 --resize_w 320 --resize_h 180 --out_dir outputs/test_transnetv2_h264 --export_preview --run_object_free_pipeline --detection_config /home/serverai/ltdoanh/LayoutGeneration/objectfree/detector_config.yaml --detection_device cuda
+python /home/serverai/ltdoanh/LayoutGeneration/pipeline.py --video "/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/21724.mp4" --backend transnetv2 --model_dir /home/serverai/ltdoanh/LayoutGeneration/src/models/TransNetV2 --distance_backend lpips --lpips_net alex --sample_stride 10 --max_frames_per_scene 30 --keyframes_per_scene 1 --nms_radius 3 --resize_w 320 --resize_h 180 --out_dir outputs/test_transnetv2_h264 --export_preview --run_object_free_pipeline --detection_config /home/serverai/ltdoanh/LayoutGeneration/objectfree/detector_config.yaml --detection_device cuda
 """

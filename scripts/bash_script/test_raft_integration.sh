@@ -68,7 +68,7 @@ python -m src.pipeline.train_rl_dsn \
   --dataset_root data/sakuga_dataset_100_samples \
   --save_dir runs/test_raft_motion \
   --log_dir runs/test_raft_motion/logs \
-  --epochs 2 \
+  --epochs 20 \
   --device cuda \
   --model_type advanced \
   --use_raft_motion 1 \

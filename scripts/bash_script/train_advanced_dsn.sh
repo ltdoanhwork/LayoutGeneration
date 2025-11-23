@@ -9,8 +9,8 @@ conda activate sam
 python -m src.pipeline.train_rl_dsn \
   --model_type advanced \
   --dataset_root /home/serverai/ltdoanh/LayoutGeneration/data/sakuga_dataset_100_samples \
-  --save_dir runs/dsn_advanced_v1_no_motion_100_samples \
-  --log_dir runs/dsn_advanced_v1_no_motion_100_samples \
+  --save_dir runs/dsn_advanced_v1_no_motion_100_samples_test_sakura \
+  --log_dir runs/dsn_advanced_v1_no_motion_100_samples_test_sakura \
   --epochs 20 \
   --device cuda:0 \
   \
@@ -48,8 +48,8 @@ python -m src.pipeline.train_rl_dsn \
   --entropy_coef 0.01 \
   --baseline_momentum 0.9 \
   \
-  --val_videos_dir /home/serverai/ltdoanh/LayoutGeneration/data/samples/vssum \
-  --val_output_dir runs/dsn_advanced_v1_no_motion_100_samples \
+  --val_videos_dir /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test \
+  --val_output_dir runs/dsn_advanced_v1_no_motion_100_samples_test_sakura \
   --validate_every 1 \
   --eval_embedder clip_vitb32 \
   --eval_backend transnetv2 \
@@ -59,4 +59,4 @@ python -m src.pipeline.train_rl_dsn \
   --eval_with_baselines
 
 echo "Training completed! Check TensorBoard for results:"
-echo "tensorboard --logdir runs/dsn_advanced_v1_no_motion_100_samples/"
+echo "tensorboard --logdir runs/dsn_advanced_v1_no_motion_100_samples_test_sakura/"

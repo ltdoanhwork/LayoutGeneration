@@ -246,6 +246,11 @@ def main():
         all_rewards = []  # For distribution
         sample_frames_selected = []  # For image visualization
         sample_frames_rejected = []
+        
+        # Motion-related accumulators
+        all_motion_feats = []  # For motion statistics
+        motion_selected = []  # Motion values at selected frames
+        motion_rejected = []  # Motion values at rejected frames
 
         # Scene progress bar
         scene_pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}", leave=False, position=1)
@@ -362,6 +367,19 @@ def main():
             all_probs.append(probs.squeeze(0).detach().cpu().numpy())
             all_rewards.append(R)
             
+            # Collect motion statistics (if available)
+            if motion_feats_np is not None:
+                all_motion_feats.append(motion_feats_np)
+                # Motion at selected vs rejected frames
+                motion_mag = np.linalg.norm(motion_feats_np, axis=1)  # (T,) magnitude
+                for idx in sel_idx:
+                    if idx < len(motion_mag):
+                        motion_selected.append(motion_mag[idx])
+                rejected_idx = [i for i in range(T) if i not in sel_idx]
+                for idx in rejected_idx:
+                    if idx < len(motion_mag):
+                        motion_rejected.append(motion_mag[idx])
+            
             # Collect sample frames for visualization (first scene of epoch)
             if len(sample_frames_selected) == 0 and frames is not None and len(sel_idx) > 0:
                 # Get up to 8 selected frames
@@ -430,6 +448,37 @@ def main():
         # Add reward distribution
         if all_rewards:
             writer.add_histogram('train/reward_distribution', np.array(all_rewards), epoch)
+        
+        # Motion-related visualizations (if motion is enabled)
+        if args.use_raft_motion and all_motion_feats:
+            # Concatenate all motion features
+            all_motion_concat = np.concatenate(all_motion_feats, axis=0)  # (N_total, D_m)
+            
+            # Motion magnitude statistics
+            motion_magnitudes = np.linalg.norm(all_motion_concat, axis=1)
+            writer.add_scalar('motion/mean_magnitude', float(np.mean(motion_magnitudes)), epoch)
+            writer.add_scalar('motion/std_magnitude', float(np.std(motion_magnitudes)), epoch)
+            writer.add_scalar('motion/max_magnitude', float(np.max(motion_magnitudes)), epoch)
+            writer.add_histogram('motion/magnitude_distribution', motion_magnitudes, epoch)
+            
+            # Motion feature statistics per dimension
+            motion_mean_per_dim = np.mean(all_motion_concat, axis=0)  # (D_m,)
+            motion_std_per_dim = np.std(all_motion_concat, axis=0)  # (D_m,)
+            writer.add_histogram('motion/feature_means', motion_mean_per_dim, epoch)
+            writer.add_histogram('motion/feature_stds', motion_std_per_dim, epoch)
+            
+            # Motion at selected vs rejected frames
+            if motion_selected and motion_rejected:
+                writer.add_scalar('motion/selected_mean', float(np.mean(motion_selected)), epoch)
+                writer.add_scalar('motion/rejected_mean', float(np.mean(motion_rejected)), epoch)
+                writer.add_scalar('motion/selection_ratio', 
+                                float(np.mean(motion_selected) / (np.mean(motion_rejected) + 1e-8)), epoch)
+                writer.add_histogram('motion/selected_magnitude', np.array(motion_selected), epoch)
+                writer.add_histogram('motion/rejected_magnitude', np.array(motion_rejected), epoch)
+                
+                tqdm.write(f"  Motion: selected={np.mean(motion_selected):.4f}, "
+                          f"rejected={np.mean(motion_rejected):.4f}, "
+                          f"ratio={np.mean(motion_selected)/(np.mean(motion_rejected)+1e-8):.2f}")
         
         # Visualize sample frames (selected vs rejected)
         if sample_frames_selected:

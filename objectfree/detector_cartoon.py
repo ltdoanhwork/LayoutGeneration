@@ -106,12 +106,12 @@ class DetectorCartoon:
                 )
                 return results
 
-    def _predict_batch(self, image_paths: list = None, folder_path: str = None, save_dir: str = None, max_images: int = 10):
+    def _predict_batch(self, image_paths: list = None, folder_path: str = None, save_dir: str = None, max_images: int = None):
         """
         Internal method for batch prediction.
 
         Args:
-            max_images (int): Maximum number of images to process for testing
+            max_images (int): Maximum number of images to process (None = process all)
         """
         if folder_path:
             # Get all image files from folder
@@ -125,8 +125,11 @@ class DetectorCartoon:
                 print(f"No image files found in {folder_path}")
                 return []
 
-            # Limit number of images for testing
-            image_paths = all_image_paths[:max_images]
+            # Limit number of images if max_images specified, otherwise process all
+            if max_images is not None:
+                image_paths = all_image_paths[:max_images]
+            else:
+                image_paths = all_image_paths
             print(f"Processing {len(image_paths)} out of {len(all_image_paths)} images")
 
         if not image_paths:
