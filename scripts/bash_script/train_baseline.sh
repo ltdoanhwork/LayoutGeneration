@@ -6,11 +6,11 @@
 set -e
 
 # Configuration
-DATASET_ROOT="outputs/sakuga_dataset"
-SAVE_DIR="outputs/dsn_runs/baseline_v1"
-VAL_VIDEOS_DIR="data/samples/Sakuga"
-VAL_OUTPUT_DIR="outputs/val_runs/baseline_v1"
-LOG_DIR="runs/dsn_baseline_v1"
+DATASET_ROOT="/home/serverai/ltdoanh/LayoutGeneration/data/sakuga_dataset_100_samples"
+SAVE_DIR="/home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/baseline_v1"
+VAL_VIDEOS_DIR="/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test"
+VAL_OUTPUT_DIR="/home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/val_runs/baseline_v1"
+LOG_DIR="/home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/logs/baseline_v1"
 
 # Training hyperparameters (stable baseline)
 EPOCHS=20
@@ -41,20 +41,20 @@ W_MS=0.2
 W_MOTION=0.2
 
 # Feature settings
-USE_MOTION=1
+USE_MOTION=0
 USE_LPIPS_DIV=0
 MS_SWD_SCALES=3
 MS_SWD_DIRS=16
 
 # Evaluation settings
 EVAL_EMBEDDER="clip_vitb32"
-EVAL_BACKEND="pyscenedetect"
+EVAL_BACKEND="transnetv2"
 EVAL_THRESHOLD=27
 EVAL_SAMPLE_STRIDE=5
 EVAL_RESIZE_W=320
 EVAL_RESIZE_H=180
 VALIDATE_EVERY=2
-EVAL_MAX_VIDEOS=10
+EVAL_MAX_VIDEOS=30
 
 # Create directories
 mkdir -p "$SAVE_DIR"

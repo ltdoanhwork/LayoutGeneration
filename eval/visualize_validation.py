@@ -456,4 +456,8 @@ if __name__ == "__main__":
 python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion \
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/plots
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples_test_sakura \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples_test_sakura/plots
 """ 
