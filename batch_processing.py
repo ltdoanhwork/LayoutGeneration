@@ -118,6 +118,11 @@ def run_pipeline_for_video(
     out_dir_base = pipeline_base_dir(out_base, distance_backend)
     video_name = Path(video_path).stem
 
+    # Pre-check: file exists and is readable
+    if not os.path.isfile(video_path):
+        print(f"\n❌ SKIP: Video file not found: {video_path}")
+        return False, ""
+
     cmd = [
         "python", "pipeline.py",
         "--video", video_path,
@@ -139,13 +144,16 @@ def run_pipeline_for_video(
     ok, out, err = _run(cmd)
 
     # Resolve thư mục thực tế sau khi pipeline chạy
-    try:
-        resolved_dir = resolve_pipeline_dir(video_name, distance_backend, out_base)
-    except FileNotFoundError as e:
-        resolved_dir = os.path.join(out_dir_base, f"_{video_name}")  # fallback hiển thị
-        print(str(e))
-
+    resolved_dir = ""
     if ok:
+        try:
+            resolved_dir = resolve_pipeline_dir(video_name, distance_backend, out_base)
+        except FileNotFoundError as e:
+            resolved_dir = os.path.join(out_dir_base, f"_{video_name}")  # fallback hiển thị
+            ok = False  # Mark as failed if artifacts not found
+            print(str(e))
+    
+    if ok and resolved_dir:
         print(f"✅ PIPELINE OK: {video_name}")
         print(f"Artifacts: {resolved_dir}")
         if out.strip():
@@ -153,7 +161,8 @@ def run_pipeline_for_video(
     else:
         print(f"❌ PIPELINE FAIL: {video_name}")
         if err.strip():
-            print(err)
+            print(f"   Error: {err[:200]}...")  # Truncate long errors
+        resolved_dir = ""
 
     return ok, resolved_dir
 
@@ -175,10 +184,16 @@ def run_eval_and_visualize_for_video(
     """Run eval và visualize; tự resolve pipeline_dir nếu cần."""
     video_name = Path(video_path).stem
 
-    if pipeline_dir is None or \
+    # Check if pipeline_dir is valid
+    if pipeline_dir is None or pipeline_dir == "" or \
        not (os.path.isfile(os.path.join(pipeline_dir, "scenes.json")) and
             os.path.isfile(os.path.join(pipeline_dir, "keyframes.csv"))):
-        pipeline_dir = resolve_pipeline_dir(video_name, distance_backend, output_base)
+        try:
+            pipeline_dir = resolve_pipeline_dir(video_name, distance_backend, output_base)
+        except FileNotFoundError as e:
+            print(f"\n❌ SKIP EVAL: Pipeline artifacts not found for {video_name}")
+            print(f"   {str(e)[:100]}...")
+            return  # Skip eval for this video
 
     scenes_json = os.path.join(pipeline_dir, "scenes.json")
     keyframes_csv = os.path.join(pipeline_dir, "keyframes.csv")
@@ -259,7 +274,7 @@ def parse_args():
                    help="Distance function for keyframe selection")
     p.add_argument("--dists_as_distance", type=int, choices=[0, 1], default=1,
                    help="Only meaningful for 'dists' backend; leave 1 by default")
-    p.add_argument("--sample_stride", type=int, default=12)
+    p.add_argument("--sample_stride", type=int, default=5)
     p.add_argument("--max_frames_per_scene", type=int, default=40)
     p.add_argument("--keyframes_per_scene", type=int, default=2)
     p.add_argument("--nms_radius", type=int, default=4)
@@ -267,8 +282,8 @@ def parse_args():
     p.add_argument("--resize_h", type=int, default=320)
 
     # Eval + Viz options
-    p.add_argument("--eval_script", default="eval_keyframes.py")
-    p.add_argument("--viz_module", default="eval.visualize.viz_medoids",
+    p.add_argument("--eval_script", default="scripts/eval_keyframes.py")
+    p.add_argument("--viz_module", default="utils.visualize.viz_medoids",
                    help="Python module path for visualization (used with -m)")
     p.add_argument("--eval_backbone", default="resnet50")
     p.add_argument("--eval_sample_stride", type=int, default=10)
@@ -322,52 +337,65 @@ def main():
     for idx, video_path in enumerate(videos, 1):
         print(f"\n--- [{idx}/{len(videos)}] {Path(video_path).name} ---")
         resolved_dir = None
+        pipeline_ok = False
 
-        # PIPELINE
-        if args.run_pipeline:
-            ok, resolved_dir = run_pipeline_for_video(
-                video_path=video_path,
-                out_base=output_base_for_pipeline,
-                backend=args.backend,
-                model_dir=args.model_dir,
-                prob_threshold=args.prob_threshold,
-                distance_backend=args.distance_backend,
-                dists_as_distance=bool(args.dists_as_distance),
-                sample_stride=args.sample_stride,
-                max_frames_per_scene=args.max_frames_per_scene,
-                keyframes_per_scene=args.keyframes_per_scene,
-                nms_radius=args.nms_radius,
-                resize_w=args.resize_w,
-                resize_h=args.resize_h,
-            )
-            if not ok:
-                failed.append(video_path)
+        try:
+            # PIPELINE
+            if args.run_pipeline:
+                pipeline_ok, resolved_dir = run_pipeline_for_video(
+                    video_path=video_path,
+                    out_base=output_base_for_pipeline,
+                    backend=args.backend,
+                    model_dir=args.model_dir,
+                    prob_threshold=args.prob_threshold,
+                    distance_backend=args.distance_backend,
+                    dists_as_distance=bool(args.dists_as_distance),
+                    sample_stride=args.sample_stride,
+                    max_frames_per_scene=args.max_frames_per_scene,
+                    keyframes_per_scene=args.keyframes_per_scene,
+                    nms_radius=args.nms_radius,
+                    resize_w=args.resize_w,
+                    resize_h=args.resize_h,
+                )
+                if not pipeline_ok:
+                    failed.append((video_path, "Pipeline processing failed"))
+                else:
+                    success_count += 1
 
-        # EVAL + VIZ
-        if args.run_evalviz:
-            run_eval_and_visualize_for_video(
-                video_path=video_path,
-                pipeline_dir=resolved_dir,   # có thể None => hàm sẽ tự resolve
-                output_base=output_base_for_eval,
-                distance_backend=args.distance_backend,
-                eval_script=args.eval_script,
-                viz_module=args.viz_module,
-                eval_backbone=args.eval_backbone,
-                eval_sample_stride=args.eval_sample_stride,
-                eval_max_frames=args.eval_max_frames,
-                eval_tau=args.eval_tau,
-            )
+            # EVAL + VIZ (only if pipeline succeeded or not running pipeline)
+            if args.run_evalviz and (pipeline_ok or not args.run_pipeline):
+                try:
+                    run_eval_and_visualize_for_video(
+                        video_path=video_path,
+                        pipeline_dir=resolved_dir if pipeline_ok else None,
+                        output_base=output_base_for_eval,
+                        distance_backend=args.distance_backend,
+                        eval_script=args.eval_script,
+                        viz_module=args.viz_module,
+                        eval_backbone=args.eval_backbone,
+                        eval_sample_stride=args.eval_sample_stride,
+                        eval_max_frames=args.eval_max_frames,
+                        eval_tau=args.eval_tau,
+                    )
+                except Exception as e:
+                    print(f"\n❌ EVAL/VIZ ERROR for {Path(video_path).name}: {str(e)[:100]}")
+                    if pipeline_ok:
+                        failed.append((video_path, f"Eval/Viz failed: {str(e)[:50]}"))
+            elif args.run_evalviz:
+                failed.append((video_path, "Skipped eval (pipeline failed)"))
 
-        success_count += 1
+        except Exception as e:
+            print(f"\n❌ UNEXPECTED ERROR for {Path(video_path).name}: {str(e)[:100]}")
+            failed.append((video_path, f"Unexpected error: {str(e)[:50]}"))
 
     print("\n" + "=" * 70)
     print("🎯 BATCH COMPLETE")
     print("=" * 70)
     print(f"✅ Processed: {success_count}/{len(videos)}")
     if failed:
-        print(f"❌ Failed ({len(failed)}):")
-        for v in failed:
-            print(f"  - {v}")
+        print(f"❌ Failed/Skipped ({len(failed)}):")
+        for v, reason in failed:
+            print(f"  - {Path(v).name}: {reason}")
     print(f"\nPipeline output    → {os.path.join(output_base_for_pipeline, 'pipeline', args.distance_backend)}")
     print(f"Eval output        → {os.path.join(output_base_for_eval, 'eval', args.distance_backend)}")
 
@@ -392,3 +420,41 @@ python batch_processing.py \
   --distance_backend lpips \
   --num_workers 4
 """
+# Run trên tập test
+"""
+LPIPS:
+python batch_processing.py \
+  --run_pipeline \
+  --run_evalviz \
+  --data_folder /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test \
+  --output_base /home/serverai/ltdoanh/LayoutGeneration/data/outputs/Dang/batch_eval_test_lpips \
+  --distance_backend lpips \
+  --backend transnetv2 \
+  --prob_threshold 0.5 \
+  --sample_stride 5 \
+  --eval_backbone resnet50 \
+  --eval_sample_stride 10 \
+  --eval_max_frames 100 \
+  --eval_tau 0.5 \
+  --nms_radius 2 \
+  --resize_w 320 \
+  --resize_h 270
+
+  DISTS
+python batch_processing.py \
+  --run_pipeline \
+  --run_evalviz \
+  --data_folder /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test \
+  --output_base /home/serverai/ltdoanh/LayoutGeneration/data/outputs/Dang/batch_eval_test_dists \
+  --distance_backend dists \
+  --backend transnetv2 \
+  --prob_threshold 0.5 \
+  --sample_stride 5 \
+  --eval_backbone resnet50 \
+  --eval_sample_stride 10 \
+  --eval_max_frames 100 \
+  --eval_tau 0.5 \
+  --nms_radius 2 \
+  --resize_w 320 \
+  --resize_h 180
+  """

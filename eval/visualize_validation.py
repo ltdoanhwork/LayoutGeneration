@@ -460,4 +460,9 @@ python -m eval.visualize_validation \
 python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples_test_sakura \
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples_test_sakura/plots
+
+ python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/val_runs/baseline_v1\
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/val_runs/baseline_v1/plots
+   
 """ 

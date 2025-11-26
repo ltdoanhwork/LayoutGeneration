@@ -8,9 +8,9 @@ Selected keyframes are highlighted in a different color.
 
 Usage:
     python scripts/visualize_dsn_cityscape.py \
-        --keyframes outputs/dsn_infer/14652/keyframes.csv \
-        --scenes outputs/dsn_infer/14652/scenes.json \
-        --output outputs/dsn_infer/14652/cityscape.png
+        --keyframes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/ep8/pipeline_results/70165/keyframes.csv \
+        --scenes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/ep8/pipeline_results/70165/scenes.json \
+        --output /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/ep8/pipeline_results/70165/cityscape.png
 """
 
 import argparse
@@ -366,7 +366,7 @@ python scripts/visualize_dsn_cityscape.py \
 
 # Tạo cả 2 loại
 python scripts/visualize_dsn_cityscape.py \
-    --keyframes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples/ep1/pipeline_results/v12/keyframes.csv \
-    --scenes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1_no_motion_100_samples/ep1/pipeline_results/v12/scenes.json \
+    --keyframes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/ep8/pipeline_results/70165/keyframes.csv \
+    --scenes /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_raft_motion/val_runs/dsn_raft_motion/ep8/pipeline_results/70165/scenes.json \
     --style both
 """
