@@ -347,6 +347,7 @@ def main():
             if args.use_anime_reward and (sample.anime_attrs is not None) and len(sel_idx) > 0:
                 attrs = sample.anime_attrs  # (T, K)
                 sel_idx_valid = [i for i in sel_idx if i < len(attrs)]
+                
                 if sel_idx_valid:
                     sel_attrs = attrs[sel_idx_valid]  # (S, K)
                     # 0=sharp, 1=colorful, 2=bright, 3=sakuga, 4=cinematic, 5=expr
@@ -354,7 +355,7 @@ def main():
                     q_color = sel_attrs[:, 1]
                     q_bright = sel_attrs[:, 2]
                     a_sakuga = sel_attrs[:, 3]
-                    a_cinema = sel_attrs[:, 4]
+                    # a_cinema = sel_attrs[:, 4] # Not used for R_look/R_sakuga directly
 
                     # R_look
                     R_look = float(
@@ -371,9 +372,13 @@ def main():
                         R_sakuga = float(a_sakuga.mean())
 
                     # R_story (beat coverage)
-                    beat = 0.5 * a_sakuga + 0.5 * a_cinema  # (T,)
-                    thr = float(beat.mean() + 0.5 * beat.std())
-                    sel_beat = beat[sel_idx_valid]
+                    # Compute beat on ALL frames to get threshold
+                    all_sakuga = attrs[:, 3]
+                    all_cinema = attrs[:, 4]
+                    beat_all = 0.5 * all_sakuga + 0.5 * all_cinema  # (T,)
+                    thr = float(beat_all.mean() + 0.5 * beat_all.std())
+                    
+                    sel_beat = beat_all[sel_idx_valid]
                     if len(sel_beat) > 0:
                         R_story = float((sel_beat > thr).mean())
                     else:

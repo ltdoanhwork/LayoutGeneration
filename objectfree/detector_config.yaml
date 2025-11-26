@@ -1,5 +1,5 @@
 model_path: "weight_model/yoloe/weights/best_general.pt"
-input_path: "../create_mask_for_user/U-2-Net/test_data/u2netp_results/rifle1.png"
+input_path: "/home/serverai/ltdoanh/LayoutGeneration/data/samples/keyframe4check/38262_keyframes/0001_clip06_frame056_38262_6.jpg"
 threshold: 0.3
 prompt: "characters in cartoon"
 save_path: "/home/serverai/ltdoanh/LayoutGeneration/outputs/objects_free"
