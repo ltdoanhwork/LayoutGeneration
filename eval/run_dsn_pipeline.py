@@ -239,6 +239,67 @@ def build_embedder(name: str, device: str):
         raise ValueError(f"Unsupported embedder '{name}'. Use: clip_vitb32 | resnet50 | classic")
 
 
+def compute_anime_attrs(frames: List[np.ndarray], device: str = "cuda") -> np.ndarray:
+    """
+    Compute Anime-CLIP-IQA attributes on-the-fly for a list of frames.
+    Returns (T, 6) array of scores.
+    """
+    import clip
+    from PIL import Image
+    
+    model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
+    model.eval()
+    
+    # Define prompt pairs (same as prepare_anime_attrs.py)
+    prompt_pairs = [
+        ("A sharp anime frame.", "A blurry anime frame."),
+        ("A colorful anime frame.", "A dull anime frame."),
+        ("A bright anime frame.", "A dark anime frame."),
+        ("A dynamic sakuga action frame.", "A calm talking anime frame."),
+        ("A cinematic impactful anime frame.", "An unremarkable anime frame."),
+        ("An anime frame with strong facial expression.", "A neutral anime frame."),
+    ]
+    
+    # Prepare text embeddings
+    import torch
+    text_tokens = []
+    for p_pos, p_neg in prompt_pairs:
+        text_tokens.append(clip.tokenize(p_pos))
+        text_tokens.append(clip.tokenize(p_neg))
+    
+    text_tokens = torch.cat(text_tokens).to(device)
+    
+    with torch.no_grad():
+        text_features = model.encode_text(text_tokens)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        K = len(prompt_pairs)
+        D = text_features.shape[-1]
+        text_features_pairs = text_features.view(K, 2, D)
+    
+    # Process frames
+    all_scores = []
+    for frame in frames:
+        # frame is BGR uint8
+        img = Image.fromarray(frame[..., ::-1])  # BGR -> RGB
+        img_tensor = preprocess(img).unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            img_features = model.encode_image(img_tensor)
+            img_features = img_features / img_features.norm(dim=-1, keepdim=True)
+            
+            scores = []
+            for k in range(K):
+                pair_feats = text_features_pairs[k]
+                logits = (100.0 * img_features @ pair_feats.T)
+                probs = logits.softmax(dim=-1)
+                score_pos = probs[0, 0].item()
+                scores.append(score_pos)
+            
+            all_scores.append(scores)
+    
+    return np.array(all_scores, dtype=np.float32)
+
+
 # -----------------------------
 # Main
 # -----------------------------
@@ -294,6 +355,10 @@ def main():
         default="clip_vitb32",
         help="Embedding backend: clip_vitb32 | resnet50 | classic",
     )
+    
+    # Anime-CLIP-IQA
+    parser.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes (0 or 1)")
+    parser.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
 
     args = parser.parse_args()
 
@@ -351,6 +416,7 @@ def main():
     # Detect model type from checkpoint
     model_type = "baseline"
     enc, pol, model = None, None, None
+    use_anime_attrs_auto = False
     
     if args.checkpoint is not None and os.path.isfile(args.checkpoint):
         print(f"[run_dsn_pipeline] Loading checkpoint from {args.checkpoint}")
@@ -361,6 +427,14 @@ def main():
             model_type = "advanced"
             print("[run_dsn_pipeline] Detected advanced DSN model")
             config = ckpt["config"]
+            
+            # Auto-detect if anime_attrs were used in training
+            if config.feat_dim > emb_dim:
+                use_anime_attrs_auto = True
+                print(f"[run_dsn_pipeline] Auto-detected Anime-CLIP-IQA (feat_dim={config.feat_dim} > emb_dim={emb_dim})")
+                args.use_anime_attrs = 1
+                args.anime_attrs_dim = config.feat_dim - emb_dim
+            
             model = DSNAdvanced(config).to(dev).eval()
             model.load_state_dict(ckpt["model"])
             print(f"  Config: {config}")
@@ -399,6 +473,17 @@ def main():
             continue
 
         feats = encode(frames)  # (T, D)
+        
+        # Compute and concatenate anime_attrs if needed
+        if args.use_anime_attrs:
+            try:
+                anime_attrs = compute_anime_attrs(frames, device=dev)  # (T, K)
+                # Align T
+                T_min = min(len(feats), len(anime_attrs))
+                feats = np.concatenate([feats[:T_min], anime_attrs[:T_min]], axis=1)
+            except Exception as e:
+                print(f"  [Warning] Failed to compute anime attrs: {e}")
+        
         T = feats.shape[0]
         if T == 0:
             continue

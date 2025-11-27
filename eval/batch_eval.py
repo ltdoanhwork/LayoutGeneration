@@ -37,6 +37,8 @@ class BatchEvaluationPipeline:
                  weights_path: str | None = None,
                  prob_threshold: float | None = None,
                  scene_device: str | None = None,
+                 use_anime_attrs: int = 0,
+                 anime_attrs_dim: int = 6,
                  debug: bool = False):
         self.videos_dir = videos_dir
         self.output_base_dir = output_base_dir
@@ -60,6 +62,8 @@ class BatchEvaluationPipeline:
         self.weights_path = weights_path
         self.prob_threshold = prob_threshold
         self.scene_device = scene_device
+        self.use_anime_attrs = use_anime_attrs
+        self.anime_attrs_dim = anime_attrs_dim
         self.pipeline_out_dir = os.path.join(output_base_dir, "pipeline_results")
         self.eval_out_dir = os.path.join(output_base_dir, "eval_results")
         os.makedirs(self.pipeline_out_dir, exist_ok=True)
@@ -100,6 +104,9 @@ class BatchEvaluationPipeline:
             if self.weights_path:               cmd += ["--weights_path", self.weights_path]
             if self.prob_threshold is not None: cmd += ["--prob_threshold", str(self.prob_threshold)]
             if self.scene_device:               cmd += ["--scene_device", self.scene_device]
+            # Anime-CLIP-IQA args
+            if self.use_anime_attrs:            cmd += ["--use_anime_attrs", str(self.use_anime_attrs)]
+            if self.anime_attrs_dim:            cmd += ["--anime_attrs_dim", str(self.anime_attrs_dim)]
 
             if self.debug: print("  [Debug] Run:", " ".join(cmd))
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -292,6 +299,9 @@ def main():
     ps.add_argument("--weights_path", type=str, default=None)
     ps.add_argument("--prob_threshold", type=float, default=None)
     ps.add_argument("--scene_device", type=str, default=None)
+    # Anime-CLIP-IQA
+    ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
+    ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
 
     args = ps.parse_args()
 
@@ -303,7 +313,8 @@ def main():
     sample_stride=args.sample_stride, resize_w=args.resize_w, resize_h=args.resize_h,
     embedder=args.embedder, device=args.eval_device, debug=args.debug,
     backend=args.backend, threshold=args.threshold, model_dir=args.model_dir,
-    weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device
+    weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device,
+    use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim
     )
 
 

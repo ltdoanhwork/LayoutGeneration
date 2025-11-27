@@ -41,14 +41,6 @@ from src.keyframe.medoid_selector import (
 from src.keyframe.random_selector import RandomSelector
 
 sys.path.append('objectfree')
-python temporal_layout_composer_unified.py \
-  --mode run \
-  --keyframes-dir /home/serverai/ltdoanh/LayoutGeneration/outputs/run_with_object_free_6261_20251101_133231/object_free_evaluation/keyframes \
-  --shape-image optimal_layout.png \
-  --min-len 3 \
-  --max-len 4 \
-  --w-clip 0.8 \
-  --w-iqa 0.2from objectfree import complete_pipeline_advanced
 from utils.io import *
 
 # Import Colla modules
@@ -64,23 +56,74 @@ import cv2
 
 
 # ------------------------------
-# Object-Free Pipeline Integration
+# Cartoon Detection Pipeline Integration (YOLOE)
 # ------------------------------
-def run_complete_object_free_pipeline(keyframes_folder, output_base, device="cuda", config_path="objectfree/config.yaml", checkpoint_path="./Grounded-SAM-2/checkpoints/sam2.1_hiera_tiny.pt"):
-    """Run complete object-free pipeline using CompletePipeline class"""
+def run_cartoon_detection_pipeline(keyframes_folder, output_base, device="cuda", config_path="objectfree/detector_config.yaml"):
+    """Run cartoon character detection using DetectorCartoon class"""
     
-    # Initialize pipeline
-    pipeline = complete_pipeline_advanced.AdvancedBBoxPipeline(device=device, output_dir=output_base)
-    pipeline.initialize_detectors()
+    from objectfree.detector_cartoon import DetectorCartoon
+    import yaml
+    import tempfile
     
-    # Override config and checkpoint paths
-    pipeline.object_detector.config_path = config_path
-    pipeline.object_detector.checkpoint_path = checkpoint_path
+    # Load config and override paths with absolute paths
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
     
-    # Process the folder
-    result = pipeline.process_single_folder(keyframes_folder, output_base)
+    # Override paths with absolute paths to avoid relative path issues
+    config['input_path'] = os.path.abspath(keyframes_folder)
+    config['type_content'] = 'image'
+    config['save_path'] = os.path.abspath(output_base)
     
-    return result
+    # Override model paths to use absolute paths from objectfree/weight_model
+    base_weight_dir = os.path.abspath("objectfree/weight_model")
+    config['model_path'] = os.path.join(base_weight_dir, "yoloe/weights/best_general.pt")
+    config['pe_path'] = os.path.join(base_weight_dir, "character-pe.pt")
+    config['mobileclip_model_path'] = os.path.join(base_weight_dir, "mobileclip_blt.pt")
+    
+    print(f"[Cartoon Detection] Input: {config['input_path']}")
+    print(f"[Cartoon Detection] Output: {config['save_path']}")
+    print(f"[Cartoon Detection] Model: {config['model_path']}")
+    
+    # Save modified config to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
+        yaml.dump(config, tmp)
+        temp_config_path = tmp.name
+    
+    try:
+        # Initialize detector with modified config
+        detector = DetectorCartoon(config_path=temp_config_path)
+        
+        # Run detection
+        results = detector.forward(save_results=True)
+    finally:
+        # Cleanup temp config
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
+    
+    # Return results summary
+    if isinstance(results, list):
+        if not results:
+            return {
+                "output_dir": output_base,
+                "total_images": 0,
+                "total_detections": 0,
+                "results": []
+            }
+        total_detections = sum(len(r.boxes) for r in results if hasattr(r, 'boxes'))
+        return {
+            "output_dir": output_base,
+            "total_images": len(results),
+            "total_detections": total_detections,
+            "results": results
+        }
+    else:
+        total_detections = len(results.boxes) if hasattr(results, 'boxes') else 0
+        return {
+            "output_dir": output_base,
+            "total_images": 1,
+            "total_detections": total_detections,
+            "results": results
+        }
 
 def prepare_colla_pipeline():
     """Prepare system resources for Colla pipeline to avoid segmentation faults."""
@@ -257,15 +300,13 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--key_jpeg_quality", type=int, default=95,
                     help="JPEG quality for exported keyframe images.")
 
-    # Object-free pipeline
+    # Cartoon character detection
     ap.add_argument("--run_object_free_pipeline", action="store_true",
-                    help="Run complete object-free evaluation pipeline after keyframe extraction.")
+                    help="Run cartoon character detection on extracted keyframes.")
     ap.add_argument("--detection_config", type=str, default=None,
-                    help="Path to Grounding DINO config file for object detection.")
-    ap.add_argument("--detection_checkpoint", type=str, default=None,
-                    help="Path to Grounding DINO checkpoint file.")
+                    help="Path to cartoon detection config file (default: objectfree/detector_config.yaml).")
     ap.add_argument("--detection_device", type=str, default=None,
-                    help="Device for object detection ('cuda'/'cpu').")
+                    help="Device for cartoon detection ('cuda'/'cpu').")
     
     # Colla layout decomposer pipeline args
     ap.add_argument("--input_shape_layout", type=str, default="repos/Colla/input_data/layout/baby.png",  help="Input shape layout image path.")
@@ -401,38 +442,38 @@ def main():
         jpeg_quality=args.key_jpeg_quality,
     )
 
-    # Run complete object-free pipeline (optional)
-    object_free_results = None
+    # Run cartoon character detection pipeline (optional)
+    detection_results = None
     if args.run_object_free_pipeline:
         print("\n" + "="*80)
-        print("RUNNING COMPLETE OBJECT-FREE PIPELINE")
+        print("RUNNING CARTOON CHARACTER DETECTION")
         print("="*80)
         
-        # Determine device for object-free pipeline
-        of_device_str = args.detection_device or args.distance_device or "cuda"
+        # Determine device for detection
+        detection_device_str = args.detection_device or args.distance_device or "cuda"
         
-        # Create base output directory for object-free results
-        of_base_dir = os.path.join(args.out_dir, "object_free_evaluation")
-        ensure_dir(of_base_dir)
+        # Create base output directory for detection results
+        detection_base_dir = os.path.join(args.out_dir, "cartoon_detection")
+        ensure_dir(detection_base_dir)
         
         try:
-            object_free_results = run_complete_object_free_pipeline(
+            detection_results = run_cartoon_detection_pipeline(
                 keyframes_folder=key_dir,
-                output_base=of_base_dir,
-                device=of_device_str,
-                config_path=args.detection_config,
-                checkpoint_path=args.detection_checkpoint
+                output_base=detection_base_dir,
+                device=detection_device_str,
+                config_path=args.detection_config or "objectfree/detector_config.yaml"
             )
             
-            if object_free_results:
-                print(f"\n[SUCCESS] Object-free pipeline completed!")
-                print(f"  • Results: {object_free_results['output_dir']}")
-                print(f"  • Final report: {os.path.join(object_free_results['output_dir'], 'final_report.json')}")
+            if detection_results:
+                print(f"\n[SUCCESS] Cartoon detection completed!")
+                print(f"  • Results: {detection_results['output_dir']}")
+                print(f"  • Images processed: {detection_results['total_images']}")
+                print(f"  • Total detections: {detection_results['total_detections']}")
             else:
-                print(f"[WARN] Object-free pipeline failed!")
+                print(f"[WARN] Cartoon detection failed!")
                 
         except Exception as e:
-            print(f"[ERROR] Object-free pipeline failed: {e}")
+            print(f"[ERROR] Cartoon detection failed: {e}")
             import traceback
             traceback.print_exc()
 
@@ -444,8 +485,8 @@ def main():
     if args.export_preview:
         print(f"  • Scene previews: {preview_dir}")
     print(f"  • Keyframe images: {key_dir}")
-    if args.run_object_free_pipeline and object_free_results:
-        print(f"  • Object-free evaluation: {object_free_results['output_dir']}")
+    if args.run_object_free_pipeline and detection_results:
+        print(f"  • Cartoon detection: {detection_results['output_dir']}")
     print("="*60)
 
     # Colla pipeline
@@ -453,11 +494,16 @@ def main():
     print("RUNNING COLLA LAYOUT DECOMPOSER PIPELINE")
     print("="*80)
     
-    # Setup paths
-    colla_output_dir = object_free_results['output_dir']
+    # === FIX: Use keyframes folder as input instead of object_free output ===
+    # Setup paths - USE KEYFRAMES FOLDER DIRECTLY
+    colla_output_dir = os.path.join(args.out_dir, "colla_layout")
+    ensure_dir(colla_output_dir)
+    
     input_shape = args.input_shape_layout
-    input_mask_folder = os.path.join(colla_output_dir, 'masked_objects')
-    input_image_collection_folder = os.path.join(colla_output_dir, 'cropped_objects')
+    # Use exported keyframes as input images
+    input_image_collection_folder = key_dir  # This is outputs/.../keyframes/
+    # Create masks folder for these keyframes
+    input_mask_folder = os.path.join(colla_output_dir, 'keyframe_masks')
     
     print(f"\n[Colla Input Verification]")
     print(f"  input_shape: {input_shape}")
@@ -466,18 +512,19 @@ def main():
     print(f"  output_dir: {colla_output_dir}")
     print(f"  scaling_factor: {args.scaling_factor}")
     
-    # Verify cropped objects exist
+    # Verify keyframe images exist
     if not os.path.exists(input_image_collection_folder):
-        raise FileNotFoundError(f"Cropped objects folder not found: {input_image_collection_folder}")
+        raise FileNotFoundError(f"Keyframes folder not found: {input_image_collection_folder}")
     
-    cropped_files = [f for f in os.listdir(input_image_collection_folder) if f.endswith(('.png', '.jpg'))]
-    print(f"  Found {len(cropped_files)} cropped images")
+    keyframe_files = [f for f in os.listdir(input_image_collection_folder) if f.endswith(('.png', '.jpg', '.jpeg'))]
+    print(f"  Found {len(keyframe_files)} keyframe images")
     
-    if len(cropped_files) == 0:
-        raise FileNotFoundError(f"No cropped images in {input_image_collection_folder}")
+    if len(keyframe_files) == 0:
+        raise FileNotFoundError(f"No keyframe images in {input_image_collection_folder}")
     
-    if len(cropped_files) > 12:
-        print(f"  [WARN] Many images ({len(cropped_files)}), may cause segfault")
+    if len(keyframe_files) > 12:
+        print(f"  [WARN] Many images ({len(keyframe_files)}), may cause segfault with Colla pipeline")
+        print(f"  [SUGGESTION] Reduce --keyframes_per_scene to 1 or use fewer scenes")
     
     # CRITICAL: Free all previous models before Colla
     print("\n[Freeing Memory Before Colla Pipeline]")
@@ -544,12 +591,12 @@ def main():
         raise
     
     # ============================================
-    # STEP 2: Create Masks from Cropped Objects
+    # STEP 2: Create Masks from Keyframe Images
     # ============================================
-    print(f"\n[STEP 2] Creating masks from cropped objects")
+    print(f"\n[STEP 2] Creating masks from keyframe images")
     os.makedirs(input_mask_folder, exist_ok=True)
     
-    print(f"  Creating masks for {len(cropped_files)} cropped images...")
+    print(f"  Creating masks for {len(keyframe_files)} keyframe images...")
     cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='simple')
     
     # Verify masks were created
@@ -559,8 +606,9 @@ def main():
     if len(mask_files) == 0:
         raise FileNotFoundError(f"Failed to create masks in {input_mask_folder}")
     
-    if len(mask_files) != len(cropped_files):
-        print(f"  [WARN] Mask count ({len(mask_files)}) != image count ({len(cropped_files)})")
+    if len(mask_files) != len(keyframe_files):
+        print(f"  [WARN] Mask count ({len(mask_files)}) != keyframe count ({len(keyframe_files)})")
+        print(f"  [INFO] This may happen if some keyframes failed mask generation")
     
     # ============================================
     # STEP 3: Spatial Assignment Optimization

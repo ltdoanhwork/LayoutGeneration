@@ -1,8 +1,8 @@
 device: cuda
-input_path: /home/serverai/ltdoanh/LayoutGeneration/data/samples/keyframe4check/vssum/v12
+input_path: /home/serverai/ltdoanh/LayoutGeneration/outputs/test_transnetv2_h264_21724_20251122_151343/cartoon_detection/predict
 model_path: /home/serverai/ltdoanh/LayoutGeneration/objectfree/yoloe/yoloe-v8l-seg-det.pt
 pe_path: /home/serverai/ltdoanh/LayoutGeneration/objectfree/weight_model/character-pe.pt
 prompt: 'characters '
 save_path: /home/serverai/ltdoanh/LayoutGeneration/outputs/inference_comparison_test3_0.1/untrained
-threshold: 0.01
+threshold: 0.2
 type_content: image

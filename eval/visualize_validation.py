@@ -464,5 +464,9 @@ python -m eval.visualize_validation \
  python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/val_runs/baseline_v1\
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_runs_baseline_100_samples/val_runs/baseline_v1/plots
-   
+
+ python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_track_a_features/val_runs\
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_track_a_features/val_runs/plots
+
 """ 

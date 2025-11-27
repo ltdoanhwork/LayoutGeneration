@@ -148,21 +148,45 @@ def export_keyframe_images(
 def run_cartoon_detection_pipeline(keyframes_folder, output_base, device="cuda", config_path="objectfree/detector_config.yaml"):
     """Run cartoon character detection using DetectorCartoon class"""
 
-    # Import detector
+    # Import detector and config loader
     from objectfree.detector_cartoon import DetectorCartoon
-
-    # Initialize detector
-    detector = DetectorCartoon(config_path=config_path)
-
-    # Update input path to keyframes folder for batch processing
-    detector.input_path = keyframes_folder
-    detector.type_content = "image"  # Process images
-
-    # Update save path to output directory
-    detector.save_path = output_base
-
-    # Run detection
-    results = detector.forward(save_results=True)
+    import yaml
+    import tempfile
+    
+    # Load config and override input_path with keyframes_folder
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # Override paths with absolute paths to avoid relative path issues
+    config['input_path'] = os.path.abspath(keyframes_folder)
+    config['type_content'] = 'image'  # Ensure image processing mode
+    config['save_path'] = os.path.abspath(output_base)
+    
+    # Override model paths to use absolute paths from objectfree/weight_model
+    base_weight_dir = os.path.abspath("objectfree/weight_model")
+    config['model_path'] = os.path.join(base_weight_dir, "yoloe/weights/best_general.pt")
+    config['pe_path'] = os.path.join(base_weight_dir, "character-pe.pt")
+    config['mobileclip_model_path'] = os.path.join(base_weight_dir, "mobileclip_blt.pt")
+    
+    print(f"[Cartoon Detection] Input: {config['input_path']}")
+    print(f"[Cartoon Detection] Output: {config['save_path']}")
+    print(f"[Cartoon Detection] Model: {config['model_path']}")
+    
+    # Save modified config to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as tmp:
+        yaml.dump(config, tmp)
+        temp_config_path = tmp.name
+    
+    try:
+        # Initialize detector with modified config
+        detector = DetectorCartoon(config_path=temp_config_path)
+        
+        # Run detection
+        results = detector.forward(save_results=True)
+    finally:
+        # Cleanup temp config
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
 
     # Return results summary
     if isinstance(results, list):
@@ -612,7 +636,7 @@ python pipeline.py \
 
 # 2) TransNetV2 (PyTorch) + DISTS
 python -m pipeline \
-  --video data/samples/6261.mp4 \
+  --video data/samples/Sakuga/6261.mp4 \
   --backend transnetv2  \
   --model_dir src/models/TransNetV2 \
   --prob_threshold 0.5 \
