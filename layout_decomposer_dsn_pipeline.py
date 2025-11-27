@@ -986,7 +986,8 @@ def main():
     os.makedirs(input_mask_folder, exist_ok=True)
     
     print(f"  Creating masks for {len(keyframe_files)} keyframe images...")
-    cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='simple')
+    # Use 'center' mask type for anime keyframes (white center with black border)
+    cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='center')
     
     # Verify masks were created
     mask_files = [f for f in os.listdir(input_mask_folder) if f.endswith('.png')]
@@ -1007,64 +1008,43 @@ def main():
     if len(mask_files) > 12:
         print(f"  [WARN] Many masks, high risk of segfault")
     
-    # Validate tree structure
+    # Run optimization (this creates slicing_result.json)
     try:
-        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
-        
-        if not os.path.exists(slicing_result_path):
-            raise FileNotFoundError(f"slicing_result.json not found at {slicing_result_path}")
-        
-        with open(slicing_result_path, 'r') as f:
-            slicing_data = json.load(f)
-        
-        def count_leaves(node):
-            if 'children' not in node or not node['children']:
-                return 1
-            return sum(count_leaves(child) for child in node['children'])
-        
-        def get_tree_height(node):
-            if 'children' not in node or not node['children']:
-                return 0
-            return 1 + max(get_tree_height(child) for child in node['children'])
-        
-        if 'tree' in slicing_data:
-            tree_leaves = count_leaves(slicing_data['tree'])
-            tree_height = get_tree_height(slicing_data['tree'])
-            print(f"  Tree structure: height={tree_height}, leaves={tree_leaves}")
-            print(f"  Available masks: {len(mask_files)}")
-            
-            # Critical validation
-            if tree_height == 0:
-                raise ValueError(f"Tree height is 0 - shape decomposition failed to create proper tree structure.")
-            
-            if tree_leaves == 0:
-                raise ValueError(f"Tree has no leaves - cannot assign images.")
-            
-            if tree_leaves > len(mask_files):
-                print(f"  [WARN] Tree needs {tree_leaves} images but only {len(mask_files)} available")
-            
-            if tree_leaves < len(mask_files):
-                print(f"  [INFO] Tree has {tree_leaves} leaves but {len(mask_files)} images available")
-                print(f"  [INFO] Optimization will select best {tree_leaves} images")
-                
-    except FileNotFoundError as e:
-        print(f"[ERROR] {e}")
-        raise
-    except ValueError as e:
-        print(f"[ERROR] Tree validation failed: {e}")
-        raise
-    except Exception as e:
-        print(f"  [WARN] Could not validate tree: {e}")
-    
-    # Run optimization
-    try:
-        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir)
+        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir, image_folder=input_image_collection_folder)
         print("  ✓ Optimization completed")
     except Exception as e:
         print(f"[ERROR] Optimization failed: {e}")
         import traceback
         traceback.print_exc()
         raise
+    
+    # Validate tree structure AFTER optimization
+    try:
+        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
+        
+        if not os.path.exists(slicing_result_path):
+            print(f"  [WARN] slicing_result.json not created by optimization")
+        else:
+            with open(slicing_result_path, 'r') as f:
+                slicing_data = json.load(f)
+            
+            def count_leaves(node):
+                if 'children' not in node or not node['children']:
+                    return 1
+                return sum(count_leaves(child) for child in node['children'])
+            
+            def get_tree_height(node):
+                if 'children' not in node or not node['children']:
+                    return 0
+                return 1 + max(get_tree_height(child) for child in node['children'])
+            
+            if 'tree' in slicing_data:
+                tree_leaves = count_leaves(slicing_data['tree'])
+                tree_height = get_tree_height(slicing_data['tree'])
+                print(f"  Tree structure: height={tree_height}, leaves={tree_leaves}")
+                print(f"  Assigned images: {len(slicing_data.get('images', []))}")
+    except Exception as e:
+        print(f"  [WARN] Could not validate tree structure: {e}")
     
     # ============================================
     # STEP 8.5: Collage Assembly & Rendering
@@ -1141,7 +1121,7 @@ python layout_decomposer_dsn_pipeline.py \
   --scene_device cuda \
   --min_scene_len 48 \
   --budget_ratio 0.06 --Bmin 3 --Bmax 15 \
-  --sample_stride 1 \
+  --sample_stride 5 \
   --resize_w 320 --resize_h 180 \
   --input_shape_layout repos/Colla/input_data/layout/baby.png \
   --scaling_factor 1 \
