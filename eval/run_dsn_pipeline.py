@@ -68,7 +68,49 @@ def timecode_from_frame(i: int, fps: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-def detect_scenes_generic(video_path: str, backend: str, **det_kwargs) -> List[Scene]:
+def normalize_and_merge_scenes(
+    scenes: List[Scene],
+    min_len_frames: int = 0,
+) -> List[Scene]:
+    """
+    Normalize (ensure start<=end), sort by start, and optionally merge short scenes
+    into the previous one if below `min_len_frames`.
+    """
+    if not scenes:
+        return []
+
+    # Normalize and sort
+    norm: List[Scene] = []
+    for s in scenes:
+        a, b = int(s.start_frame), int(s.end_frame)
+        if b < a:
+            a, b = b, a
+        norm.append(Scene(a, b))
+    norm.sort(key=lambda x: (x.start_frame, x.end_frame))
+
+    if min_len_frames <= 0:
+        return norm
+
+    merged: List[Scene] = []
+    for sc in norm:
+        if not merged:
+            merged.append(sc)
+            continue
+        cur_len = sc.end_frame - sc.start_frame + 1
+        if cur_len >= min_len_frames:
+            merged.append(sc)
+        else:
+            prev = merged[-1]
+            if sc.start_frame <= prev.end_frame + 1:
+                # Contiguous → extend previous
+                merged[-1] = Scene(prev.start_frame, max(prev.end_frame, sc.end_frame))
+            else:
+                # Non-contiguous but still merge into previous by extending end
+                merged[-1] = Scene(prev.start_frame, sc.end_frame)
+    return merged
+
+
+def detect_scenes_generic(video_path: str, backend: str, min_scene_len: int = 0, **det_kwargs) -> List[Scene]:
     """Wrap your scene detector into a simple helper that always returns >=1 scene."""
     det = create_detector(backend, **det_kwargs)
     try:
@@ -82,6 +124,10 @@ def detect_scenes_generic(video_path: str, backend: str, **det_kwargs) -> List[S
         n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         cap.release()
         scenes = [Scene(0, max(0, n - 1))]
+    
+    # Merge short scenes if min_scene_len is specified
+    if min_scene_len > 0:
+        scenes = normalize_and_merge_scenes(scenes, min_len_frames=min_scene_len)
 
     return scenes
 
@@ -347,6 +393,7 @@ def main():
     parser.add_argument("--weights_path", type=str, default=None, help="[transnetv2] direct .pth path (override model_dir)")
     parser.add_argument("--prob_threshold", type=float, default=0.5, help="[transnetv2] boundary probability threshold.")
     parser.add_argument("--scene_device", type=str, default="cuda", help="[transnetv2] device for model ('cuda'/'cpu').")
+    parser.add_argument("--min_scene_len", type=int, default=0, help="Minimum scene length (frames). Shorter scenes are merged into previous one.")
 
     # Embedder
     parser.add_argument(
@@ -380,7 +427,7 @@ def main():
         "prob_threshold": args.prob_threshold,
         "device": args.scene_device,
     }
-    scenes = detect_scenes_generic(video_path, args.backend, **det_kwargs)
+    scenes = detect_scenes_generic(video_path, args.backend, min_scene_len=args.min_scene_len, **det_kwargs)
 
     cap = cv2.VideoCapture(video_path)
     fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -578,3 +625,17 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+"""
+python -m eval.run_dsn_pipeline \
+  --video data/samples/Sakuga/14652.mp4 \
+  --out_dir outputs/test_eval_track_a \
+  --checkpoint runs/dsn_track_a_features/dsn_checkpoint_ep2.pt \
+  --device cuda \
+  --embedder clip_vitb32 \
+  --backend transnetv2 \
+  --model_dir src/models/TransNetV2 \
+  --prob_threshold 0.5 \
+  --scene_device cuda \
+  --min_scene_len 48
+"""
