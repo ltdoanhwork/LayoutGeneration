@@ -26,3 +26,5 @@ objectfree/annotations/*
 runs/*
 objectfree/weight_model/*
 objectfree/yoloe/*
+yoloe_dataset_characters/*
+objectfree/yoloe_dataset_characters_0.2/*

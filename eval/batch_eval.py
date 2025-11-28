@@ -84,7 +84,6 @@ class BatchEvaluationPipeline:
             "--video", video_path,
             "--out_dir", output_dir,
             "--device", self.device,
-            "--feat_dim", str(self.feat_dim),
             "--enc_hidden", str(self.enc_hidden),
             "--lstm_hidden", str(self.lstm_hidden),
             "--budget_ratio", str(self.budget_ratio),
@@ -98,6 +97,10 @@ class BatchEvaluationPipeline:
             ]
             if self.checkpoint:
                 cmd += ["--checkpoint", self.checkpoint]
+                # Let run_dsn_pipeline auto-detect feat_dim from checkpoint config
+            else:
+                # No checkpoint: pass feat_dim explicitly
+                cmd += ["--feat_dim", str(self.feat_dim)]
             # Detector-specific args (chỉ add nếu có)
             if self.threshold is not None:      cmd += ["--threshold", str(self.threshold)]
             if self.model_dir:                  cmd += ["--model_dir", self.model_dir]
@@ -125,6 +128,7 @@ class BatchEvaluationPipeline:
                 "output_dir": output_dir,
             }
         except Exception as e:
+            if self.debug: raise
             print(f"  [Error] Keyframe extraction failed: {e}")
             return None
 
@@ -181,6 +185,7 @@ class BatchEvaluationPipeline:
                     json.dump(base, f, indent=2, ensure_ascii=False)
             return base
         except Exception as e:
+            if self.debug: raise
             print(f"  [Error] Evaluation failed: {e}")
             return None
 
@@ -218,11 +223,15 @@ class BatchEvaluationPipeline:
                 "metrics": metrics,
                 "timestamp": datetime.now().isoformat()
             }
-            tqdm.write(f"  📊 RecErr: {metrics.get('RecErr', 'N/A')} "
-                       f"Frechet: {metrics.get('Frechet', 'N/A')} "
+            
+            # Extract metrics for logging (handle nesting if with_baselines=True)
+            std_m = metrics.get("method", metrics)
+            tqdm.write(f"  📊 RecErr: {std_m.get('RecErr', 'N/A')} "
+                       f"Frechet: {std_m.get('Frechet', 'N/A')} "
                        f"LPIPS_Gap: {metrics.get('LPIPS_PerceptualGap', 'N/A')}")
             return True
         except Exception as e:
+            if self.debug: raise
             self.errors[video_id] = str(e)
             return False
 
@@ -247,11 +256,20 @@ class BatchEvaluationPipeline:
             rec = []; fre = []; scov=[]; tcov=[]; lp_gap=[]; lp_div=[]; ms=[]
             for vid, r in self.results.items():
                 # Metrics are nested: r["metrics"]["method"] contains DSN results
-                m = r["metrics"].get("method", r["metrics"])  # fallback to r["metrics"] if no "method" key
-                rec.append(m.get("RecErr")); fre.append(m.get("Frechet"))
-                scov.append(m.get("SceneCoverage")); tcov.append(m.get("TemporalCoverage@tau"))
-                lp_gap.append(m.get("LPIPS_PerceptualGap")); lp_div.append(m.get("LPIPS_DiversitySel"))
-                ms.append(m.get("MS_SWD_Color"))
+                # Extra metrics are at top level of r["metrics"] usually
+                root = r["metrics"]
+                m = root.get("method", root)  # fallback to root if no "method" key
+                
+                rec.append(m.get("RecErr"))
+                fre.append(m.get("Frechet"))
+                scov.append(m.get("SceneCoverage"))
+                tcov.append(m.get("TemporalCoverage@tau"))
+                
+                # Extra metrics might be in root or m
+                lp_gap.append(root.get("LPIPS_PerceptualGap", m.get("LPIPS_PerceptualGap")))
+                lp_div.append(root.get("LPIPS_DiversitySel", m.get("LPIPS_DiversitySel")))
+                ms.append(root.get("MS_SWD_Color", m.get("MS_SWD_Color")))
+            
             summary["aggregate_metrics"] = {
                 "RecErr_mean": safe_mean(rec),
                 "Frechet_mean": safe_mean(fre),
@@ -345,7 +363,7 @@ python -m eval.batch_eval \
     --resize_h 180 \
     --sample_stride 5 \
     --embedder clip_vitb32 \
-    --backend pyscenedetect \
+    --backend transnetv2 \
     --threshold 27 \
     --eval_backbone resnet50 \
     --eval_device cuda \
@@ -355,5 +373,5 @@ python -m eval.batch_eval \
     --with_baselines \
     --debug \
     --limit 1\
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_advanced_v1/dsn_checkpoint_ep17.pt
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_track_a_features/dsn_checkpoint_ep2.pt
 """

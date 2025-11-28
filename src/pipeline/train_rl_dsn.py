@@ -628,6 +628,11 @@ def main():
                 cmd += ["--prob_threshold", str(args.eval_prob_threshold)]
             if args.eval_scene_device:
                 cmd += ["--scene_device", args.eval_scene_device]
+            # Anime-CLIP-IQA arguments (if used during training)
+            if args.use_anime_attrs:
+                cmd += ["--use_anime_attrs", str(args.use_anime_attrs)]
+            if args.anime_attrs_dim:
+                cmd += ["--anime_attrs_dim", str(args.anime_attrs_dim)]
             # Baseline switch
             if args.eval_with_baselines:
                 cmd.append("--with_baselines")

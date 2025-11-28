@@ -16,6 +16,10 @@ All code comments are in English (per user requirement).
 from __future__ import annotations
 import os
 import argparse
+import json
+import gc
+import time
+import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Tuple, Optional
 import sys
@@ -322,10 +326,8 @@ def build_argparser() -> argparse.ArgumentParser:
 def main():
     args = build_argparser().parse_args()
     
-    # Create unique output directory with timestamp to avoid overwriting
-    video_name = args.video.split('/')[-1].split('.')[0]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.out_dir = f"{args.out_dir}_{video_name}_{timestamp}"
+    # Use output directory as specified (no timestamp modification)
+    # args.out_dir remains as user specified
 
     # Prepare output folders
     ensure_dir(args.out_dir)
@@ -574,16 +576,22 @@ def main():
         sd.generate_cuts(shape_mask_path, colla_output_dir)
         print("  ✓ Shape decomposition completed")
         
-        # Verify slicing_result.json was created
-        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
-        if not os.path.exists(slicing_result_path):
-            print(f"  [WARN] slicing_result.json not created at {slicing_result_path}")
+        # Verify final_cut.json was created (this is what generate_cuts produces)
+        final_cut_path = os.path.join(colla_output_dir, 'final_cut.json')
+        if not os.path.exists(final_cut_path):
+            print(f"  [ERROR] final_cut.json not created at {final_cut_path}")
             print(f"  [DEBUG] Checking output_dir contents...")
             if os.path.exists(colla_output_dir):
                 files = [f for f in os.listdir(colla_output_dir) if f.endswith('.json')]
                 print(f"  [DEBUG] JSON files in output_dir: {files}")
+            raise FileNotFoundError(f"final_cut.json not found - shape decomposition failed")
         else:
-            print(f"  ✓ slicing_result.json created successfully")
+            print(f"  ✓ final_cut.json created successfully")
+            # Read and show cut count
+            import json
+            with open(final_cut_path, 'r') as f:
+                cuts = json.load(f)
+            print(f"  Number of cuts: {len(cuts)}")
     except Exception as e:
         print(f"[ERROR] Shape decomposition failed: {e}")
         import traceback
@@ -615,76 +623,30 @@ def main():
     # ============================================
     print(f"\n[STEP 3] Spatial assignment optimization")
     print(f"  Processing {len(mask_files)} masks")
+    print(f"  Input shape mask: {shape_mask_path}")
+    print(f"  Input mask folder: {input_mask_folder}")
+    print(f"  Output dir: {colla_output_dir}")
     
     if len(mask_files) > 12:
-        print(f"  [WARN] Many masks, high risk of segfault")
+        print(f"  [WARN] Many masks ({len(mask_files)}), high risk of segfault")
     
-    # Validate tree structure
-    try:
-        import json
-        # slicing_result.json is created by sd.generate_cuts in colla_output_dir
-        # But we need to check where it actually gets created
-        # Based on STEP 1: sd.generate_cuts(shape_mask_path, colla_output_dir)
-        # It should create slicing_result.json in colla_output_dir
-        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
-        
-        # Debug: check what files were actually created
-        if not os.path.exists(slicing_result_path):
-            print(f"  [DEBUG] Looking for slicing_result.json in: {colla_output_dir}")
-            if os.path.exists(colla_output_dir):
-                files = os.listdir(colla_output_dir)
-                print(f"  [DEBUG] Files in output_dir: {files}")
-            raise FileNotFoundError(f"slicing_result.json not found at {slicing_result_path}")
-        
-        with open(slicing_result_path, 'r') as f:
-            slicing_data = json.load(f)
-        
-        def count_leaves(node):
-            if 'children' not in node or not node['children']:
-                return 1
-            return sum(count_leaves(child) for child in node['children'])
-        
-        def get_tree_height(node):
-            if 'children' not in node or not node['children']:
-                return 0
-            return 1 + max(get_tree_height(child) for child in node['children'])
-        
-        if 'tree' in slicing_data:
-            tree_leaves = count_leaves(slicing_data['tree'])
-            tree_height = get_tree_height(slicing_data['tree'])
-            print(f"  Tree structure: height={tree_height}, leaves={tree_leaves}")
-            print(f"  Available masks: {len(mask_files)}")
-            
-            # Critical validation
-            if tree_height == 0:
-                raise ValueError(f"Tree height is 0 - shape decomposition failed to create proper tree structure. This will cause segfault.")
-            
-            if tree_leaves == 0:
-                raise ValueError(f"Tree has no leaves - cannot assign images. This will cause segfault.")
-            
-            if tree_leaves > len(mask_files):
-                print(f"  [WARN] Tree needs {tree_leaves} images but only {len(mask_files)} available")
-                print(f"  [SUGGESTION] Increase --keyframes_per_scene to get more images")
-            
-            if tree_leaves < len(mask_files):
-                print(f"  [INFO] Tree has {tree_leaves} leaves but {len(mask_files)} images available")
-                print(f"  [INFO] Optimization will select best {tree_leaves} images")
-                
-    except FileNotFoundError as e:
-        print(f"[ERROR] {e}")
-        raise
-    except ValueError as e:
-        print(f"[ERROR] Tree validation failed: {e}")
-        print(f"[SOLUTION] The shape layout image may be too simple or too complex.")
-        print(f"[SUGGESTION] Try a different shape layout image with clearer structure.")
-        raise
-    except Exception as e:
-        print(f"  [WARN] Could not validate tree: {e}")
+    # Verify final_cut.json exists (created by STEP 1)
+    final_cut_path = os.path.join(colla_output_dir, 'final_cut.json')
+    if not os.path.exists(final_cut_path):
+        raise FileNotFoundError(f"final_cut.json not found at {final_cut_path}. STEP 1 may have failed.")
     
-    # Run optimization with validation
+    # Run optimization - this will create slicing_result.json
     try:
-        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir)
+        # Pass image folder so optimization can find correct image extensions
+        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir, image_folder=input_image_collection_folder)
         print("  ✓ Optimization completed")
+        
+        # Verify slicing_result.json was created
+        slicing_result_path = os.path.join(colla_output_dir, 'slicing_result.json')
+        if not os.path.exists(slicing_result_path):
+            raise FileNotFoundError(f"slicing_result.json not created after optimization")
+        print(f"  ✓ slicing_result.json created successfully")
+        
     except Exception as e:
         print(f"[ERROR] Optimization failed: {e}")
         print(f"[TIP] This is likely caused by:")
@@ -745,7 +707,8 @@ def main():
     print("COLLA PIPELINE COMPLETED SUCCESSFULLY!")
     print("="*80)
     print(f"  Output directory: {colla_output_dir}")
-    print(f"  Final collage: {os.path.join(colla_output_dir, 'final_collage.png')}")
+    print(f"  Collage: {os.path.join(colla_output_dir, 'collage.png')}")
+    print(f"  Collage with borders: {os.path.join(colla_output_dir, 'collage_white_space.png')}")
     print("="*80)
     
     print("\n[DONE] Full pipeline completed!")
