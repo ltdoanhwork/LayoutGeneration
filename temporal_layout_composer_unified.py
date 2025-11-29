@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import cv2
 from shapely.geometry import LineString, Point, Polygon
-from shapely import ops
+from shapely import ops, affinity
 import networkx as nx
 from PIL import Image
 
@@ -54,6 +54,21 @@ try:
 except Exception as e:
     print(f"Warning: Could not import sas_optimization: {e}")
     sas = None
+
+
+# ============================================================================
+# HELPER FUNCTION: Split geometry compatible with Shapely 2.x
+# ============================================================================
+def split_geometry(geom, splitter):
+    """Helper function to split geometry, compatible with Shapely 2.x.
+    
+    In Shapely 2.x, ops.split returns a GeometryCollection which is not directly iterable.
+    This function handles both Shapely 1.x and 2.x.
+    """
+    result = ops.split(geom, splitter)
+    if hasattr(result, 'geoms'):
+        return list(result.geoms)
+    return list(result)
 
 
 def vector_angle(vector_1, vector_2):
@@ -382,31 +397,71 @@ class UnbalancedStrategy:
             return node.left_child if random.random() > 0.5 else node.right_child
 
 
-def tree_initialization(number_of_leaf_node, balanced=True, fix_seed=False):
-    """Initialize a slicing tree."""
+# ============================================================================
+# ADAPTIVE TREE INITIALIZATION (from sas_optimization.py)
+# ============================================================================
+def adaptive_tree_initialization(number_of_leaf_node, balanced=True, fix_seed=False):
+    """
+    Tạo cây nhị phân với CHÍNH XÁC number_of_leaf_node leaf nodes.
+    Không padding thành 2^k như phương pháp cũ.
+    
+    Ưu điểm:
+    - 7 ảnh → tạo đúng 7 leaf (không có leaf trống)
+    - 10 ảnh → tạo đúng 10 leaf (không lãng phí)
+    - Giảm không gian tìm kiếm: 4^h → 4^(log₂n)
+    
+    Cách hoạt động:
+    - Chia đệ quy: n → left (n//2) + right (n - n//2)
+    - Cây có thể không cân bằng hoàn toàn nhưng gần tối ưu
+    
+    Args:
+        number_of_leaf_node: Số lượng leaf nodes cần tạo (= số ảnh)
+        balanced: Nếu True, ưu tiên cân bằng cây
+        fix_seed: Fix random seed để reproducibility
+    
+    Returns:
+        root: TreeNode root của cây adaptive
+    """
     if fix_seed:
         random.seed(10)
-
-    def insert(tree_node, strategy):
-        if not tree_node.is_leaf():
-            node_to_insert = strategy.choose(tree_node)
-            insert(node_to_insert, strategy)
-        else:
-            new_left = TreeNode()
-            new_right = TreeNode()
-            tree_node.left_child = new_left
-            tree_node.right_child = new_right
-        return tree_node
-
-    root = TreeNode()
-    ba = BalancedStrategy()
-    ub = UnbalancedStrategy()
-    for i in range(number_of_leaf_node - 1):
+    
+    def build_adaptive_tree(num_leaves):
+        """Recursive helper để build cây với đúng num_leaves leaf."""
+        if num_leaves == 0:
+            return None
+        
+        if num_leaves == 1:
+            # Base case: tạo leaf node
+            return TreeNode()
+        
+        # Recursive case: chia thành 2 subtree
+        node = TreeNode()
+        
         if balanced:
-            insert(root, ba)
+            # Balanced split: chia đều nhất có thể
+            left_count = num_leaves // 2
+            right_count = num_leaves - left_count
         else:
-            insert(root, ub)
+            # Unbalanced split: ngẫu nhiên hoặc theo heuristic
+            split_point = random.randint(1, num_leaves - 1)
+            left_count = split_point
+            right_count = num_leaves - split_point
+        
+        node.left_child = build_adaptive_tree(left_count)
+        node.right_child = build_adaptive_tree(right_count)
+        
+        return node
+    
+    root = build_adaptive_tree(number_of_leaf_node)
     return root
+
+
+def tree_initialization(number_of_leaf_node, balanced=True, fix_seed=False):
+    """
+    Wrapper function: Gọi adaptive_tree_initialization thay vì old implementation.
+    Giữ tên hàm cũ để không phá vỡ code hiện tại.
+    """
+    return adaptive_tree_initialization(number_of_leaf_node, balanced, fix_seed)
 
 
 def heuristic_initialization(cur_node, medial_axis, depth):
@@ -699,21 +754,56 @@ def render_layout_with_assigned_images(forest, image_dir, canvas_shape, output_p
         return False
 
 
-def get_optimal(tree_node, medial_axis, output_dir=None, step_num=0):
+def get_optimal(tree_node, medial_axis, output_dir=None, step_num=0, iqa_weight=0.3):
     """
     Recursively find optimal slicing tree configuration using Colla's approach.
     Tests 4 configurations (2 axial + 2 crosswise) and picks best score.
+    
+    IQA Integration:
+    - Higher IQA frames should get larger/better positioned cells
+    - Loss = area * (1 + iqa_weight * iqa_score) * quality_penalty
+    - This prioritizes larger areas for higher IQA images
+    
+    Args:
+        tree_node: Current tree node
+        medial_axis: Medial axis for splitting direction
+        output_dir: Optional output directory for debug visualization
+        step_num: Step counter for debug
+        iqa_weight: Weight for IQA score in loss (0-1). Default 0.3
     """
     if tree_node.is_leaf():
-        # Leaf node: already optimized
+        # Leaf node: calculate score based on area, quality, and IQA
         convex = tree_node.polygon.convex_hull.simplify(10)
         quality = cell_quality(tree_node.polygon)
-        return (1.0 if quality else 0.5), tree_node
+        
+        # Get cell area (larger is better for high-IQA images)
+        cell_area = tree_node.polygon.area
+        
+        # Get IQA score from assignment (normalized 0-1)
+        iqa_score = 0.5  # Default neutral score
+        if tree_node.assignment and isinstance(tree_node.assignment, dict):
+            # Try different possible IQA score fields
+            iqa_score = tree_node.assignment.get("iqa_score_norm", 
+                        tree_node.assignment.get("iqa_score",
+                        tree_node.assignment.get("priority_score", 0.5)))
+        
+        # Calculate loss: higher area * higher IQA = better score
+        # iqa_bonus: range [1 - iqa_weight*0.5, 1 + iqa_weight*0.5]
+        # e.g., with iqa_weight=0.3: range [0.85, 1.15]
+        iqa_bonus = 1.0 + iqa_weight * (iqa_score - 0.5)
+        
+        # Quality penalty: good quality cells get full score, bad quality get penalty
+        quality_multiplier = 1.0 if quality else 0.5
+        
+        # Final score: area-weighted with IQA bonus and quality
+        score = cell_area * iqa_bonus * quality_multiplier
+        
+        return score, tree_node
     
     if tree_node.configuration != -1:
         # Already configured, just recurse
-        score_left, left_result = get_optimal(tree_node.left_child, medial_axis, output_dir, step_num)
-        score_right, right_result = get_optimal(tree_node.right_child, medial_axis, output_dir, step_num)
+        score_left, left_result = get_optimal(tree_node.left_child, medial_axis, output_dir, step_num, iqa_weight)
+        score_right, right_result = get_optimal(tree_node.right_child, medial_axis, output_dir, step_num, iqa_weight)
         return score_left + score_right, tree_node
     
     # Test all 4 configurations
@@ -738,13 +828,13 @@ def get_optimal(tree_node, medial_axis, output_dir=None, step_num=0):
         
         # Split along both directions
         try:
-            axial_splits = list(ops.split(tree_node.polygon, cut_axial))
+            axial_splits = split_geometry(tree_node.polygon, cut_axial)
             axial_splits.sort(key=lambda x: -x.area)
         except:
             axial_splits = [tree_node.polygon, tree_node.polygon]
         
         try:
-            crosswise_splits = list(ops.split(tree_node.polygon, cut_crosswise))
+            crosswise_splits = split_geometry(tree_node.polygon, cut_crosswise)
             crosswise_splits.sort(key=lambda x: -x.area)
         except:
             crosswise_splits = [tree_node.polygon, tree_node.polygon]
@@ -774,8 +864,8 @@ def get_optimal(tree_node, medial_axis, output_dir=None, step_num=0):
                 right_copy.assignment = {"id": -1, "aspect_ratio": 1.0, "coord": []}
                 
                 # Recursively evaluate
-                score_l, _ = get_optimal(left_copy, medial_axis)
-                score_r, _ = get_optimal(right_copy, medial_axis)
+                score_l, _ = get_optimal(left_copy, medial_axis, output_dir, step_num, iqa_weight)
+                score_r, _ = get_optimal(right_copy, medial_axis, output_dir, step_num, iqa_weight)
                 
                 total_score = score_l + score_r
                 all_results.append((total_score, config_id, splits, config_name))
@@ -795,8 +885,8 @@ def get_optimal(tree_node, medial_axis, output_dir=None, step_num=0):
         tree_node.right_child.polygon = best_splits[1]
         
         # Recurse on children
-        score_l, _ = get_optimal(tree_node.left_child, medial_axis)
-        score_r, _ = get_optimal(tree_node.right_child, medial_axis)
+        score_l, _ = get_optimal(tree_node.left_child, medial_axis, output_dir, step_num, iqa_weight)
+        score_r, _ = get_optimal(tree_node.right_child, medial_axis, output_dir, step_num, iqa_weight)
         
         return best_score, tree_node
         
@@ -813,6 +903,10 @@ class TemporalLayoutComposer:
     - Temporal segments define which images belong together temporally
     - Layer 2 of the forest tree respects these clusters
     - Each temporal cluster gets its own subtree in the forest
+    
+    IQA Integration:
+    - Higher IQA images get larger/better positioned cells in the layout
+    - Controlled by `iqa_layout_weight` parameter (default 0.3)
     """
     
     def __init__(self,
@@ -824,7 +918,8 @@ class TemporalLayoutComposer:
                  max_len: int = 4,
                  w_clip: float = 0.8,
                  w_iqa: float = 0.2,
-                 balanced: bool = True):
+                 balanced: bool = True,
+                 iqa_layout_weight: float = 0.3):
         """
         Args:
             image_dir: Directory with cropped images (for temporal segmentation)
@@ -835,6 +930,8 @@ class TemporalLayoutComposer:
             max_len: Max segment length (temporal)
             w_clip, w_iqa: Temporal segmenter weights
             balanced: Whether to use balanced tree strategy
+            iqa_layout_weight: Weight for IQA score in spatial layout optimization (0-1).
+                              Higher values prioritize larger cells for high-IQA images. Default 0.3
         """
         self.image_dir = image_dir
         self.mask_folder = mask_folder
@@ -845,6 +942,7 @@ class TemporalLayoutComposer:
         self.w_clip = w_clip
         self.w_iqa = w_iqa
         self.balanced = balanced
+        self.iqa_layout_weight = iqa_layout_weight
         
         self.segments = None
         self.segment_files = None
@@ -1121,9 +1219,9 @@ class TemporalLayoutComposer:
                 leaf.polygon = polygon
                 leaf.assignment = {"id": -1, "aspect_ratio": 1.0, "coord": []}
             
-            # Run optimization to find best cuts
+            # Run optimization to find best cuts (with IQA weighting)
             print("[_create_partitions_from_medial_axis] Running get_optimal() to test 4 cut configs...")
-            score, optimized_root = get_optimal(root, medial_axis, self.output_dir)
+            score, optimized_root = get_optimal(root, medial_axis, self.output_dir, 0, self.iqa_layout_weight)
             
             # Extract leaf polygons
             leaves = _list_leaves(optimized_root)

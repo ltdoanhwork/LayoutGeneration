@@ -52,17 +52,64 @@ def representativeness_reward(feats_all: np.ndarray, feats_sel: np.ndarray) -> f
     min_dist = np.min(D_all_sel, axis=1)
     return float(- np.mean(min_dist))
 
+def anime_iqa_emphasis(q_all: np.ndarray,
+                       sel_idx: List[int],
+                       important_ids=(1, 3, 4, 5),
+                       lambda_match=0.1) -> float:
+    """
+    Reward based on Anime-CLIP IQA scores.
+    q_all: (T, K) scores
+    important_ids: indices of dimensions to boost (e.g. cinematic, expression, sakuga, sharpness)
+    lambda_match: weight for matching global distribution (negative MSE)
+    """
+    if len(sel_idx) == 0:
+        return 0.0
+    q_sel = q_all[sel_idx]
+    mu_all = q_all.mean(axis=0)
+    mu_sel = q_sel.mean(axis=0)
+
+    # 1) match entire distribution (lightly)
+    diff = mu_sel - mu_all
+    R_match = -float(np.mean(diff**2))
+
+    # 2) boost important dimensions
+    # We want selected frames to have HIGHER scores in these dimensions than average
+    boost = (mu_sel[list(important_ids)] - mu_all[list(important_ids)]).mean()
+    
+    return lambda_match * R_match + float(boost)
+
+def prob_separation_reward(probs: np.ndarray, sel_idx: List[int]) -> float:
+    """
+    Reward for separating probabilities of selected vs non-selected frames.
+    probs: (T,) or (1, T)
+    """
+    probs = probs.flatten()
+    T = len(probs)
+    if len(sel_idx) == 0 or len(sel_idx) == T:
+        return 0.0
+    
+    sel_probs = probs[sel_idx]
+    rest_idx = [i for i in range(T) if i not in sel_idx]
+    rest_probs = probs[rest_idx]
+    
+    # We want mean prob of keyframes to be higher than non-keyframes
+    return float(sel_probs.mean() - rest_probs.mean())
+
 def reward_combo(
     feats_all: np.ndarray,             # (T,D) normalized
     sel_idx: List[int],                # indices
     frames_all: Optional[List[np.ndarray]] = None,
     motion: Optional[np.ndarray] = None,
+    anime_scores: Optional[np.ndarray] = None, # (T, K)
+    probs: Optional[np.ndarray] = None,        # (T,)
     w_div: float = 1.0,
     w_rep: float = 1.0,
     w_rec: float = 0.0,
     w_fd: float = 0.0,
     w_ms: float = 0.0,
     w_motion: float = 0.0,
+    w_anime: float = 0.0,
+    w_probsep: float = 0.0,
     ms_swd_scales: int = 3,
     ms_swd_dirs: int = 16,
     use_lpips_div: bool = False,
@@ -92,5 +139,17 @@ def reward_combo(
         # simple average motion on selected indices
         R_mot = float(np.mean(motion[sel_idx]))
 
-    R = ( w_div*R_div + w_rep*R_rep + w_rec*R_rec + w_fd*R_fd + w_ms*R_ms + w_motion*R_mot )
+    R_anime = 0.0
+    if w_anime != 0.0 and anime_scores is not None:
+        # Default important_ids=(1, 3, 4, 5) -> cinematic, expression, sakuga, sharpness
+        # Assuming anime_scores order: 0=brightness, 1=cinematic, 2=color, 3=expression, 4=sakuga, 5=sharpness
+        # Adjust if your dataset has different order.
+        R_anime = anime_iqa_emphasis(anime_scores, sel_idx)
+
+    R_probsep = 0.0
+    if w_probsep != 0.0 and probs is not None:
+        R_probsep = prob_separation_reward(probs, sel_idx)
+
+    R = ( w_div*R_div + w_rep*R_rep + w_rec*R_rec + w_fd*R_fd + w_ms*R_ms + w_motion*R_mot 
+          + w_anime*R_anime + w_probsep*R_probsep )
     return float(R)

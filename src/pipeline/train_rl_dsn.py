@@ -113,6 +113,8 @@ def main():
     ap.add_argument("--w_fd",  type=float, default=0.2)
     ap.add_argument("--w_ms",  type=float, default=0.2)
     ap.add_argument("--w_motion", type=float, default=0.2)
+    ap.add_argument("--w_anime", type=float, default=0.0, help="Weight for Anime-CLIP IQA reward")
+    ap.add_argument("--w_probsep", type=float, default=0.0, help="Weight for probability separation reward")
     ap.add_argument("--ms_swd_scales", type=int, default=3)
     ap.add_argument("--ms_swd_dirs",   type=int, default=16)
 
@@ -227,7 +229,10 @@ def main():
         'w_rec': args.w_rec,
         'w_fd': args.w_fd,
         'w_ms': args.w_ms,
+        'w_ms': args.w_ms,
         'w_motion': args.w_motion,
+        'w_anime': args.w_anime,
+        'w_probsep': args.w_probsep,
         'feat_dim': args.feat_dim,
         'enc_hidden': args.enc_hidden,
         'lstm_hidden': args.lstm_hidden,
@@ -266,7 +271,7 @@ def main():
         for scene_dir in scene_pbar:
             # Load scene data with optional RAFT motion
             load_motion = bool(args.use_raft_motion) and args.model_type == "advanced"
-            load_anime_attrs = bool(args.use_anime_attrs) or bool(args.use_anime_reward)
+            load_anime_attrs = bool(args.use_anime_attrs) or bool(args.use_anime_reward) or (args.w_anime > 0)
             sample = load_scene_dir(scene_dir, load_frames=True, load_motion=load_motion, load_anime_attrs=load_anime_attrs)
             
             # Track A: Feature concatenation
@@ -337,6 +342,9 @@ def main():
                 motion=motion,
                 w_div=args.w_div, w_rep=args.w_rep, w_rec=args.w_rec,
                 w_fd=args.w_fd, w_ms=args.w_ms, w_motion=args.w_motion,
+                w_anime=args.w_anime, w_probsep=args.w_probsep,
+                anime_scores=sample.anime_attrs if args.use_anime_attrs or args.use_anime_reward or args.w_anime > 0 else None,
+                probs=probs.detach().cpu().numpy().squeeze(0),
                 ms_swd_scales=args.ms_swd_scales, ms_swd_dirs=args.ms_swd_dirs,
                 use_lpips_div=bool(args.use_lpips_div),
                 lpips_net=args.lpips_net,

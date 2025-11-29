@@ -80,7 +80,8 @@ def run_cartoon_detection_pipeline(keyframes_folder, output_base, device="cuda",
     
     # Override model paths to use absolute paths from objectfree/weight_model
     base_weight_dir = os.path.abspath("objectfree/weight_model")
-    config['model_path'] = os.path.join(base_weight_dir, "yoloe/weights/best_general.pt")
+    # Use new trained weights from train3
+    config['model_path'] = os.path.abspath("objectfree/yoloe/runs/detect/train3/weights/best.pt")
     config['pe_path'] = os.path.join(base_weight_dir, "character-pe.pt")
     config['mobileclip_model_path'] = os.path.join(base_weight_dir, "mobileclip_blt.pt")
     
@@ -316,6 +317,30 @@ def build_argparser() -> argparse.ArgumentParser:
     ap.add_argument("--input_shape_layout", type=str, default="repos/Colla/input_data/layout/baby.png",  help="Input shape layout image path.")
     ap.add_argument("--input_mask_folder", type=str, default="repos/Colla/input_data/image_collections/children_mask", help="Input mask folder path.")
     ap.add_argument("--scaling_factor", type=int, default=1, help="Scaling factor for collage rendering (default 1 to avoid segfault with many images).")
+    ap.add_argument("--center_salient", action="store_true", default=True,
+                    help="Use U2-Net to center salient region at shape centroid (default: True).")
+    ap.add_argument("--no_center_salient", action="store_false", dest="center_salient",
+                    help="Disable U2-Net salient centering, use original foreground positioning.")
+    ap.add_argument("--salient_fit_ratio", type=float, default=0.65,
+                    help="How much of shape the salient region should occupy (0.0-1.0, default: 0.65).")
+    ap.add_argument("--use_smart_crop", action="store_true", default=True,
+                    help="Use fast smart crop instead of mesh warp (default: True, ~10x faster).")
+    ap.add_argument("--use_mesh_warp", action="store_false", dest="use_smart_crop",
+                    help="Use mesh warp instead of smart crop (slower but more flexible).")
+    ap.add_argument("--use_fast_saliency", action="store_true", default=True,
+                    help="Use fast heuristic saliency instead of U2-Net (default: True, ~100x faster).")
+    ap.add_argument("--use_u2net", action="store_false", dest="use_fast_saliency",
+                    help="Use U2-Net saliency instead of fast heuristic (slower but more accurate).")
+    
+    # Object detection mode (for cartoon characters)
+    ap.add_argument("--use_object_detection", action="store_true", default=False,
+                    help="Use YOLOE object detection instead of saliency (for cartoon characters).")
+    ap.add_argument("--detection_threshold", type=float, default=0.25,
+                    help="Detection confidence threshold (default: 0.25).")
+    ap.add_argument("--enable_seam_carving", action="store_true", default=True,
+                    help="Apply seam carving when objects are spread out (default: True).")
+    ap.add_argument("--disable_seam_carving", action="store_false", dest="enable_seam_carving",
+                    help="Disable seam carving for spread-out objects.")
 
     return ap
 
@@ -509,10 +534,12 @@ def main():
     
     print(f"\n[Colla Input Verification]")
     print(f"  input_shape: {input_shape}")
-    print(f"  input_mask_folder: {input_mask_folder}")
     print(f"  input_image_collection: {input_image_collection_folder}")
     print(f"  output_dir: {colla_output_dir}")
     print(f"  scaling_factor: {args.scaling_factor}")
+    print(f"  use_object_detection: {args.use_object_detection}")
+    if not args.use_object_detection:
+        print(f"  input_mask_folder: {input_mask_folder}")
     
     # Verify keyframe images exist
     if not os.path.exists(input_image_collection_folder):
@@ -599,35 +626,44 @@ def main():
         raise
     
     # ============================================
-    # STEP 2: Create Masks from Keyframe Images
+    # STEP 2: Create Masks from Keyframe Images (skip if using object detection)
     # ============================================
-    print(f"\n[STEP 2] Creating masks from keyframe images")
-    os.makedirs(input_mask_folder, exist_ok=True)
-    
-    print(f"  Creating masks for {len(keyframe_files)} keyframe images...")
-    cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='simple')
-    
-    # Verify masks were created
-    mask_files = [f for f in os.listdir(input_mask_folder) if f.endswith('.png')]
-    print(f"  Created {len(mask_files)} masks")
-    
-    if len(mask_files) == 0:
-        raise FileNotFoundError(f"Failed to create masks in {input_mask_folder}")
-    
-    if len(mask_files) != len(keyframe_files):
-        print(f"  [WARN] Mask count ({len(mask_files)}) != keyframe count ({len(keyframe_files)})")
-        print(f"  [INFO] This may happen if some keyframes failed mask generation")
+    if args.use_object_detection:
+        print(f"\n[STEP 2] SKIPPED - Using object detection mode (no mask folder needed)")
+        input_mask_folder = None  # Object detection mode doesn't need masks
+        mask_files = []
+    else:
+        print(f"\n[STEP 2] Creating masks from keyframe images")
+        os.makedirs(input_mask_folder, exist_ok=True)
+        
+        print(f"  Creating masks for {len(keyframe_files)} keyframe images...")
+        cm.batch_create_masks(input_image_collection_folder, input_mask_folder, mask_type='simple')
+        
+        # Verify masks were created
+        mask_files = [f for f in os.listdir(input_mask_folder) if f.endswith('.png')]
+        print(f"  Created {len(mask_files)} masks")
+        
+        if len(mask_files) == 0:
+            raise FileNotFoundError(f"Failed to create masks in {input_mask_folder}")
+        
+        if len(mask_files) != len(keyframe_files):
+            print(f"  [WARN] Mask count ({len(mask_files)}) != keyframe count ({len(keyframe_files)})")
+            print(f"  [INFO] This may happen if some keyframes failed mask generation")
     
     # ============================================
     # STEP 3: Spatial Assignment Optimization
     # ============================================
     print(f"\n[STEP 3] Spatial assignment optimization")
-    print(f"  Processing {len(mask_files)} masks")
+    if args.use_object_detection:
+        print(f"  Mode: Object Detection (YOLOE)")
+        print(f"  Detection threshold: {args.detection_threshold}")
+    else:
+        print(f"  Processing {len(mask_files)} masks")
+        print(f"  Input mask folder: {input_mask_folder}")
     print(f"  Input shape mask: {shape_mask_path}")
-    print(f"  Input mask folder: {input_mask_folder}")
     print(f"  Output dir: {colla_output_dir}")
     
-    if len(mask_files) > 12:
+    if not args.use_object_detection and len(mask_files) > 12:
         print(f"  [WARN] Many masks ({len(mask_files)}), high risk of segfault")
     
     # Verify final_cut.json exists (created by STEP 1)
@@ -637,8 +673,15 @@ def main():
     
     # Run optimization - this will create slicing_result.json
     try:
-        # Pass image folder so optimization can find correct image extensions
-        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir, image_folder=input_image_collection_folder)
+        # Pass image folder and object detection parameters
+        so.optimization(
+            shape_mask_path, 
+            input_mask_folder,  # Can be None in object detection mode
+            colla_output_dir, 
+            image_folder=input_image_collection_folder,
+            use_object_detection=args.use_object_detection,
+            detection_threshold=args.detection_threshold
+        )
         print("  ✓ Optimization completed")
         
         # Verify slicing_result.json was created
@@ -682,8 +725,28 @@ def main():
     if canvas_size_mb > 500:
         print(f"  [WARN] Large canvas ({canvas_size_mb:.1f} MB), may be slow")
     
+    # Determine mode string for logging
+    if args.use_object_detection:
+        mode_str = f"ObjDet+MeshWarp (thresh={args.detection_threshold}, seam_carving={args.enable_seam_carving})"
+    elif args.use_smart_crop and args.use_fast_saliency:
+        mode_str = "SmartCrop+FastSaliency"
+    elif args.use_smart_crop:
+        mode_str = "SmartCrop+U2Net"
+    else:
+        mode_str = "MeshWarp"
+    print(f"  Mode: {mode_str}")
+    print(f"  Center salient: {args.center_salient}, Fit ratio: {args.salient_fit_ratio}")
+    
     try:
-        ca.render_collage(input_image_collection_folder, colla_output_dir, args.scaling_factor)
+        ca.render_collage(
+            input_image_collection_folder, colla_output_dir, args.scaling_factor,
+            enable_debug=True,  # Enable debug visualization
+            center_salient=args.center_salient, salient_fit_ratio=args.salient_fit_ratio,
+            use_smart_crop=args.use_smart_crop, use_fast_saliency=args.use_fast_saliency,
+            use_object_detection=args.use_object_detection,
+            detection_threshold=args.detection_threshold,
+            enable_seam_carving=args.enable_seam_carving
+        )
         print("  ✓ Rendering completed")
     except Exception as e:
         print(f"[ERROR] Rendering failed: {e}")

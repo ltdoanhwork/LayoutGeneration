@@ -392,7 +392,8 @@ def run_cartoon_detection_pipeline(keyframes_folder, output_base, device="cuda",
     
     # Override model paths to use absolute paths from objectfree/weight_model
     base_weight_dir = os.path.abspath("objectfree/weight_model")
-    config['model_path'] = os.path.join(base_weight_dir, "yoloe/weights/best_general.pt")
+    # Use new trained weights from train3
+    config['model_path'] = os.path.abspath("objectfree/yoloe/runs/detect/train3/weights/best.pt")
     config['pe_path'] = os.path.join(base_weight_dir, "character-pe.pt")
     config['mobileclip_model_path'] = os.path.join(base_weight_dir, "mobileclip_blt.pt")
     
@@ -594,6 +595,30 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="Input shape layout image path.")
     ap.add_argument("--scaling_factor", type=int, default=1,
                     help="Scaling factor for collage rendering (default 1 to avoid segfault with many images).")
+    ap.add_argument("--center_salient", action="store_true", default=True,
+                    help="Use U2-Net to center salient region at shape centroid (default: True).")
+    ap.add_argument("--no_center_salient", action="store_false", dest="center_salient",
+                    help="Disable U2-Net salient centering, use original foreground positioning.")
+    ap.add_argument("--salient_fit_ratio", type=float, default=0.65,
+                    help="How much of shape the salient region should occupy (0.0-1.0, default: 0.65).")
+    ap.add_argument("--use_smart_crop", action="store_true", default=True,
+                    help="Use fast smart crop instead of mesh warp (default: True, ~10x faster).")
+    ap.add_argument("--use_mesh_warp", action="store_false", dest="use_smart_crop",
+                    help="Use mesh warp instead of smart crop (slower but more flexible).")
+    ap.add_argument("--use_fast_saliency", action="store_true", default=True,
+                    help="Use fast heuristic saliency instead of U2-Net (default: True, ~100x faster).")
+    ap.add_argument("--use_u2net", action="store_false", dest="use_fast_saliency",
+                    help="Use U2-Net saliency instead of fast heuristic (slower but more accurate).")
+    
+    # Object detection mode (for cartoon characters)
+    ap.add_argument("--use_object_detection", action="store_true", default=False,
+                    help="Use YOLOE object detection instead of saliency (for cartoon characters).")
+    ap.add_argument("--detection_threshold", type=float, default=0.25,
+                    help="Detection confidence threshold (default: 0.25).")
+    ap.add_argument("--enable_seam_carving", action="store_true", default=True,
+                    help="Apply seam carving when objects are spread out (default: True).")
+    ap.add_argument("--disable_seam_carving", action="store_false", dest="enable_seam_carving",
+                    help="Disable seam carving for spread-out objects.")
 
     return ap
 
@@ -1071,7 +1096,14 @@ def main():
         print(f"  [WARN] Large canvas ({canvas_size_mb:.1f} MB), may be slow")
     
     try:
-        ca.render_collage(input_image_collection_folder, colla_output_dir, args.scaling_factor)
+        ca.render_collage(
+            input_image_collection_folder, colla_output_dir, args.scaling_factor,
+            center_salient=args.center_salient, salient_fit_ratio=args.salient_fit_ratio,
+            use_smart_crop=args.use_smart_crop, use_fast_saliency=args.use_fast_saliency,
+            use_object_detection=args.use_object_detection,
+            detection_threshold=args.detection_threshold,
+            enable_seam_carving=args.enable_seam_carving
+        )
         print("  ✓ Rendering completed")
     except Exception as e:
         print(f"[ERROR] Rendering failed: {e}")
@@ -1109,8 +1141,9 @@ def main():
 if __name__ == "__main__":
     main()
 """
+
 python layout_decomposer_dsn_pipeline.py \
-  --video data/samples/Sakuga/14652.mp4 \
+  --video /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test/70039.mp4 \
   --out_dir outputs/dsn_layout_test \
   --checkpoint runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt \
   --device cuda \
