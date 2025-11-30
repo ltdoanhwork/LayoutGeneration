@@ -111,7 +111,7 @@ python -m src.pipeline.train_rl_dsn \
   --val_output_dir $VAL_OUTPUT_DIR \
   --validate_every 1 \
   --eval_embedder clip_vitb32 \
-  --eval_backend pyscenedetect \
+  --eval_backend transnetv2 \
   --eval_sample_stride 5 \
   --eval_resize_w 320 \
   --eval_resize_h 180 \
