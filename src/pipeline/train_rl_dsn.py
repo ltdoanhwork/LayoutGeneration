@@ -91,12 +91,14 @@ def main():
                     help="Motion fusion type")
 
     # Anime-CLIP-IQA
-    ap.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes as features")
+    ap.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes as features (Track A)")
     ap.add_argument("--anime_attrs_dim", type=int, default=0, help="Dimension of anime attributes")
+    
+    # Anime-CLIP-IQA reward weights (unified look-sakuga-story triad)
     ap.add_argument("--use_anime_reward", type=int, default=0, help="Use Anime-CLIP-IQA based rewards")
-    ap.add_argument("--w_look",   type=float, default=0.0)
-    ap.add_argument("--w_sakuga", type=float, default=0.0)
-    ap.add_argument("--w_story",  type=float, default=0.0)
+    ap.add_argument("--w_anime_look",   type=float, default=0.0, help="Weight for anime aesthetic quality (look) reward")
+    ap.add_argument("--w_anime_sakuga", type=float, default=0.0, help="Weight for anime dynamic sakuga reward")
+    ap.add_argument("--w_anime_story",  type=float, default=0.0, help="Weight for anime narrative beat coverage reward")
 
     # RL
     ap.add_argument("--entropy_coef", type=float, default=0.01)
@@ -113,7 +115,6 @@ def main():
     ap.add_argument("--w_fd",  type=float, default=0.2)
     ap.add_argument("--w_ms",  type=float, default=0.2)
     ap.add_argument("--w_motion", type=float, default=0.2)
-    ap.add_argument("--w_anime", type=float, default=0.0, help="Weight for Anime-CLIP IQA reward")
     ap.add_argument("--w_probsep", type=float, default=0.0, help="Weight for probability separation reward")
     ap.add_argument("--ms_swd_scales", type=int, default=3)
     ap.add_argument("--ms_swd_dirs",   type=int, default=16)
@@ -229,9 +230,10 @@ def main():
         'w_rec': args.w_rec,
         'w_fd': args.w_fd,
         'w_ms': args.w_ms,
-        'w_ms': args.w_ms,
         'w_motion': args.w_motion,
-        'w_anime': args.w_anime,
+        'w_anime_look': args.w_anime_look,
+        'w_anime_sakuga': args.w_anime_sakuga,
+        'w_anime_story': args.w_anime_story,
         'w_probsep': args.w_probsep,
         'feat_dim': args.feat_dim,
         'enc_hidden': args.enc_hidden,
@@ -264,6 +266,11 @@ def main():
         all_motion_feats = []  # For motion statistics
         motion_selected = []  # Motion values at selected frames
         motion_rejected = []  # Motion values at rejected frames
+        
+        # Gradient-related accumulators
+        grad_norms_before_clip = []  # Gradient norms before clipping
+        grad_norms_after_clip = []   # Gradient norms after clipping
+        all_gradients = []  # Store gradients for histogram
 
         # Scene progress bar
         scene_pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}", leave=False, position=1)
@@ -271,7 +278,8 @@ def main():
         for scene_dir in scene_pbar:
             # Load scene data with optional RAFT motion
             load_motion = bool(args.use_raft_motion) and args.model_type == "advanced"
-            load_anime_attrs = bool(args.use_anime_attrs) or bool(args.use_anime_reward) or (args.w_anime > 0)
+            load_anime_attrs = (bool(args.use_anime_attrs) or bool(args.use_anime_reward) or 
+                              args.w_anime_look > 0 or args.w_anime_sakuga > 0 or args.w_anime_story > 0)
             sample = load_scene_dir(scene_dir, load_frames=True, load_motion=load_motion, load_anime_attrs=load_anime_attrs)
             
             # Track A: Feature concatenation
@@ -342,8 +350,11 @@ def main():
                 motion=motion,
                 w_div=args.w_div, w_rep=args.w_rep, w_rec=args.w_rec,
                 w_fd=args.w_fd, w_ms=args.w_ms, w_motion=args.w_motion,
-                w_anime=args.w_anime, w_probsep=args.w_probsep,
-                anime_scores=sample.anime_attrs if args.use_anime_attrs or args.use_anime_reward or args.w_anime > 0 else None,
+                w_anime_look=args.w_anime_look, 
+                w_anime_sakuga=args.w_anime_sakuga, 
+                w_anime_story=args.w_anime_story,
+                w_probsep=args.w_probsep,
+                anime_scores=sample.anime_attrs if args.use_anime_reward or (args.w_anime_look > 0 or args.w_anime_sakuga > 0 or args.w_anime_story > 0) else None,
                 probs=probs.detach().cpu().numpy().squeeze(0),
                 ms_swd_scales=args.ms_swd_scales, ms_swd_dirs=args.ms_swd_dirs,
                 use_lpips_div=bool(args.use_lpips_div),
@@ -351,48 +362,6 @@ def main():
                 lpips_device=args.lpips_device,
             )
 
-            # Track B: Anime-based rewards
-            if args.use_anime_reward and (sample.anime_attrs is not None) and len(sel_idx) > 0:
-                attrs = sample.anime_attrs  # (T, K)
-                sel_idx_valid = [i for i in sel_idx if i < len(attrs)]
-                
-                if sel_idx_valid:
-                    sel_attrs = attrs[sel_idx_valid]  # (S, K)
-                    # 0=sharp, 1=colorful, 2=bright, 3=sakuga, 4=cinematic, 5=expr
-                    q_sharp = sel_attrs[:, 0]
-                    q_color = sel_attrs[:, 1]
-                    q_bright = sel_attrs[:, 2]
-                    a_sakuga = sel_attrs[:, 3]
-                    # a_cinema = sel_attrs[:, 4] # Not used for R_look/R_sakuga directly
-
-                    # R_look
-                    R_look = float(
-                        (q_sharp.mean() + q_color.mean() + q_bright.mean()) / 3.0
-                    )
-
-                    # R_sakuga
-                    if motion is not None:
-                        m = np.array(motion[:len(attrs)], dtype=np.float32)
-                        m = (m - m.min()) / (m.max() - m.min() + 1e-8)
-                        sel_m = m[sel_idx_valid]
-                        R_sakuga = float(0.5 * a_sakuga.mean() + 0.5 * sel_m.mean())
-                    else:
-                        R_sakuga = float(a_sakuga.mean())
-
-                    # R_story (beat coverage)
-                    # Compute beat on ALL frames to get threshold
-                    all_sakuga = attrs[:, 3]
-                    all_cinema = attrs[:, 4]
-                    beat_all = 0.5 * all_sakuga + 0.5 * all_cinema  # (T,)
-                    thr = float(beat_all.mean() + 0.5 * beat_all.std())
-                    
-                    sel_beat = beat_all[sel_idx_valid]
-                    if len(sel_beat) > 0:
-                        R_story = float((sel_beat > thr).mean())
-                    else:
-                        R_story = 0.0
-
-                    R += args.w_look * R_look + args.w_sakuga * R_sakuga + args.w_story * R_story
 
             # budget penalty
             if B_target > 0:
@@ -415,6 +384,29 @@ def main():
 
             opt.zero_grad()
             loss.backward()
+            
+            # Compute gradient norm BEFORE clipping
+            if args.model_type == "baseline":
+                params_to_check = list(enc.parameters()) + list(pol.parameters())
+            else:  # advanced
+                params_to_check = list(model.parameters())
+            
+            grad_norm_before = 0.0
+            grad_values = []
+            for p in params_to_check:
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2).item()
+                    grad_norm_before += param_norm ** 2
+                    # Sample some gradient values for histogram (limit to avoid memory)
+                    if len(grad_values) < 10000:  # Limit total gradient values
+                        grad_values.extend(p.grad.data.cpu().flatten().numpy().tolist()[:1000])
+            
+            grad_norm_before = grad_norm_before ** 0.5
+            grad_norms_before_clip.append(grad_norm_before)
+            if len(grad_values) > 0:
+                all_gradients.extend(grad_values[:1000])  # Sample for histogram
+            
+            # Gradient clipping
             if args.max_grad_norm and args.max_grad_norm > 0:
                 if args.model_type == "baseline":
                     torch.nn.utils.clip_grad_norm_(
@@ -426,6 +418,16 @@ def main():
                         model.parameters(),
                         args.max_grad_norm
                     )
+            
+            # Compute gradient norm AFTER clipping
+            grad_norm_after = 0.0
+            for p in params_to_check:
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2).item()
+                    grad_norm_after += param_norm ** 2
+            grad_norm_after = grad_norm_after ** 0.5
+            grad_norms_after_clip.append(grad_norm_after)
+            
             opt.step()
 
             # logging accumulators
@@ -552,6 +554,41 @@ def main():
                 tqdm.write(f"  Motion: selected={np.mean(motion_selected):.4f}, "
                           f"rejected={np.mean(motion_rejected):.4f}, "
                           f"ratio={np.mean(motion_selected)/(np.mean(motion_rejected)+1e-8):.2f}")
+        
+        # Gradient visualizations
+        if grad_norms_before_clip:
+            mean_grad_before = float(np.mean(grad_norms_before_clip))
+            std_grad_before = float(np.std(grad_norms_before_clip))
+            max_grad_before = float(np.max(grad_norms_before_clip))
+            
+            mean_grad_after = float(np.mean(grad_norms_after_clip))
+            std_grad_after = float(np.std(grad_norms_after_clip))
+            max_grad_after = float(np.max(grad_norms_after_clip))
+            
+            # Log gradient norm statistics
+            writer.add_scalar('gradients/norm_before_clip_mean', mean_grad_before, epoch)
+            writer.add_scalar('gradients/norm_before_clip_std', std_grad_before, epoch)
+            writer.add_scalar('gradients/norm_before_clip_max', max_grad_before, epoch)
+            
+            writer.add_scalar('gradients/norm_after_clip_mean', mean_grad_after, epoch)
+            writer.add_scalar('gradients/norm_after_clip_std', std_grad_after, epoch)
+            writer.add_scalar('gradients/norm_after_clip_max', max_grad_after, epoch)
+            
+            # Clipping ratio (how much clipping affected gradients)
+            clip_ratio = mean_grad_after / (mean_grad_before + 1e-8)
+            writer.add_scalar('gradients/clip_ratio', clip_ratio, epoch)
+            
+            # Histograms
+            writer.add_histogram('gradients/norm_before_clip', np.array(grad_norms_before_clip), epoch)
+            writer.add_histogram('gradients/norm_after_clip', np.array(grad_norms_after_clip), epoch)
+            
+            # Gradient value distribution (sampled)
+            if all_gradients:
+                writer.add_histogram('gradients/value_distribution', np.array(all_gradients), epoch)
+            
+            tqdm.write(f"  Gradients: before_clip={mean_grad_before:.4f}, "
+                      f"after_clip={mean_grad_after:.4f}, "
+                      f"clip_ratio={clip_ratio:.3f}")
         
         # Visualize sample frames (selected vs rejected)
         if sample_frames_selected:

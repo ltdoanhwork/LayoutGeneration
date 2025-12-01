@@ -1,54 +1,50 @@
 #!/bin/bash
-# Track D: Anime-CLIP-IQA Emphasis + Prob Separation
-# Based on Track C but adds specific emphasis on cinematic/sakuga/sharpness and prob separation.
+# Track B V2: Unified Anime Reward System (Look-Sakuga-Story Triad)
+# No double-counting - clean implementation
 
 set -e
 
 echo "=========================================="
-echo "Training Track D: Anime Emphasis + Prob Sep"
+echo "Training Track B V2: Unified Anime Rewards"
 echo "=========================================="
 
 # Configuration
 DATASET_ROOT="data/sakuga_dataset_100_samples"
-SAVE_DIR="runs/dsn_track_d_anime_reward_v2"
-LOG_DIR="runs/dsn_track_d_anime_reward_v2/logs"
+SAVE_DIR="runs/dsn_track_b_v2_unified"
+LOG_DIR="$SAVE_DIR/logs"
 EPOCHS=20
 DEVICE="cuda"
 
 # Validation
 VAL_VIDEOS_DIR="/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test"
-VAL_OUTPUT_DIR="runs/dsn_track_d_anime_reward_v2/val_runs"
-
-# Anime-CLIP-IQA Features (Track A)
-USE_ANIME_ATTRS=1
-ANIME_ATTRS_DIM=6
-FEAT_DIM=$((512 + ANIME_ATTRS_DIM))
+VAL_OUTPUT_DIR="$SAVE_DIR/val_runs"
 
 # Unified Anime Reward Weights (Look-Sakuga-Story Triad)
 USE_ANIME_REWARD=1
-W_ANIME_LOOK=0.2
-W_ANIME_SAKUGA=0.2
-W_ANIME_STORY=0.1
-
-# Other Rewards
-W_PROBSEP=0.1     # Start small: 0.1
-ENTROPY_COEF=0.005 # Reduced from 0.01 to allow sharper probs
+W_ANIME_LOOK=0.5
+W_ANIME_SAKUGA=0.7
+W_ANIME_STORY=0.3
 
 echo "Configuration:"
 echo "  Dataset: $DATASET_ROOT"
 echo "  Save dir: $SAVE_DIR"
 echo "  Epochs: $EPOCHS"
 echo "  Device: $DEVICE"
-echo "  Anime Attrs: ENABLED (Dim: $ANIME_ATTRS_DIM)"
-echo "  Unified Anime Rewards: Look=$W_ANIME_LOOK, Sakuga=$W_ANIME_SAKUGA, Story=$W_ANIME_STORY"
-echo "  Other Rewards: W_PROBSEP=$W_PROBSEP"
-echo "  Entropy Coef: $ENTROPY_COEF"
+echo "  Unified Anime Rewards:"
+echo "    Look:   $W_ANIME_LOOK"
+echo "    Sakuga: $W_ANIME_SAKUGA"
+echo "    Story:  $W_ANIME_STORY"
 echo ""
 
 # Check for anime_attrs.npy
 echo "Checking for Anime-CLIP-IQA attributes..."
-FIRST_VIDEO=$(ls -d $DATASET_ROOT/*/ | head -n 1)
-FIRST_SCENE=$(ls -d ${FIRST_VIDEO}scene_*/ | head -n 1)
+FIRST_VIDEO=$(ls -d $DATASET_ROOT/*/ 2>/dev/null | head -n 1)
+if [ -z "$FIRST_VIDEO" ]; then
+    echo "❌ ERROR: No videos found in $DATASET_ROOT"
+    exit 1
+fi
+
+FIRST_SCENE=$(ls -d ${FIRST_VIDEO}scene_*/ 2>/dev/null | head -n 1)
 ATTRS_FILE="${FIRST_SCENE}anime_attrs.npy"
 
 if [ ! -f "$ATTRS_FILE" ]; then
@@ -68,7 +64,7 @@ python -m src.pipeline.train_rl_dsn \
   --device $DEVICE \
   \
   --model_type advanced \
-  --feat_dim $FEAT_DIM \
+  --feat_dim 512 \
   --enc_hidden 256 \
   --lstm_hidden 128 \
   --dropout 0.3 \
@@ -85,19 +81,15 @@ python -m src.pipeline.train_rl_dsn \
   --motion_dim 128 \
   --motion_fusion_type cross_attention \
   \
-  --use_anime_attrs $USE_ANIME_ATTRS \
-  --anime_attrs_dim $ANIME_ATTRS_DIM \
   --use_anime_reward $USE_ANIME_REWARD \
   --w_anime_look $W_ANIME_LOOK \
   --w_anime_sakuga $W_ANIME_SAKUGA \
   --w_anime_story $W_ANIME_STORY \
   \
-  --w_probsep $W_PROBSEP \
-  \
   --lr 1e-4 \
   --weight_decay 0.0 \
   --max_grad_norm 1.0 \
-  --entropy_coef $ENTROPY_COEF \
+  --entropy_coef 0.01 \
   --baseline_momentum 0.9 \
   \
   --budget_ratio 0.06 \
@@ -126,4 +118,12 @@ python -m src.pipeline.train_rl_dsn \
   --eval_resize_h 180 \
   --eval_with_baselines
 
-echo "Done."
+echo ""
+echo "=========================================="
+echo "✅ Training Complete!"
+echo "=========================================="
+echo "Results saved to: $SAVE_DIR"
+echo ""
+echo "View training progress:"
+echo "  tensorboard --logdir $LOG_DIR --port 6006"
+echo ""

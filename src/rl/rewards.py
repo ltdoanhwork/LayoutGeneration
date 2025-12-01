@@ -5,6 +5,16 @@ import numpy as np
 from eval.metrics import *
 from src.distance_selector.registry import create_metric
 
+# Anime-CLIP-IQA attribute indices for clarity
+ATTR_INDEX = {
+    "sharpness": 0,
+    "colorfulness": 1,
+    "brightness": 2,
+    "sakuga": 3,
+    "cinematic": 4,
+    "expression": 5,
+}
+
 def cosine_dist_matrix(X: np.ndarray) -> np.ndarray:
     S = X @ X.T
     return 1.0 - S
@@ -52,31 +62,106 @@ def representativeness_reward(feats_all: np.ndarray, feats_sel: np.ndarray) -> f
     min_dist = np.min(D_all_sel, axis=1)
     return float(- np.mean(min_dist))
 
-def anime_iqa_emphasis(q_all: np.ndarray,
-                       sel_idx: List[int],
-                       important_ids=(1, 3, 4, 5),
-                       lambda_match=0.1) -> float:
+def anime_reward(
+    attrs_all: np.ndarray,
+    sel_idx: List[int],
+    motion: Optional[np.ndarray] = None,
+) -> Dict[str, float]:
     """
-    Reward based on Anime-CLIP IQA scores.
-    q_all: (T, K) scores
-    important_ids: indices of dimensions to boost (e.g. cinematic, expression, sakuga, sharpness)
-    lambda_match: weight for matching global distribution (negative MSE)
-    """
-    if len(sel_idx) == 0:
-        return 0.0
-    q_sel = q_all[sel_idx]
-    mu_all = q_all.mean(axis=0)
-    mu_sel = q_sel.mean(axis=0)
-
-    # 1) match entire distribution (lightly)
-    diff = mu_sel - mu_all
-    R_match = -float(np.mean(diff**2))
-
-    # 2) boost important dimensions
-    # We want selected frames to have HIGHER scores in these dimensions than average
-    boost = (mu_sel[list(important_ids)] - mu_all[list(important_ids)]).mean()
+    Unified anime reward with three conceptually distinct components.
     
-    return lambda_match * R_match + float(boost)
+    Args:
+        attrs_all: (T, K) Anime-CLIP IQA scores for all frames
+        sel_idx: List of selected frame indices
+        motion: (T,) Optional motion magnitudes for each frame
+    
+    Returns:
+        Dict with keys: "look", "sakuga", "story"
+        - look: Static aesthetic quality (normalized)
+        - sakuga: Dynamic sakuga quality combined with motion (normalized)
+        - story: Narrative beat coverage (fraction above threshold)
+    """
+    if len(sel_idx) == 0 or attrs_all.shape[0] == 0:
+        return {"look": 0.0, "sakuga": 0.0, "story": 0.0}
+    
+    # Filter valid indices
+    sel_idx_valid = [i for i in sel_idx if i < len(attrs_all)]
+    if len(sel_idx_valid) == 0:
+        return {"look": 0.0, "sakuga": 0.0, "story": 0.0}
+    
+    # Extract attributes using ATTR_INDEX
+    sharp_all = attrs_all[:, ATTR_INDEX["sharpness"]]
+    color_all = attrs_all[:, ATTR_INDEX["colorfulness"]]
+    bright_all = attrs_all[:, ATTR_INDEX["brightness"]]
+    sakuga_all = attrs_all[:, ATTR_INDEX["sakuga"]]
+    cinema_all = attrs_all[:, ATTR_INDEX["cinematic"]]
+    
+    # Selected frames
+    sharp_sel = sharp_all[sel_idx_valid]
+    color_sel = color_all[sel_idx_valid]
+    bright_sel = bright_all[sel_idx_valid]
+    sakuga_sel = sakuga_all[sel_idx_valid]
+    
+    # --- R_look: Static aesthetic quality (normalized z-score) ---
+    # Mean of (sharp + color + brightness) for selected vs all
+    look_all = (sharp_all + color_all + bright_all) / 3.0
+    look_sel = (sharp_sel + color_sel + bright_sel) / 3.0
+    
+    look_mean_all = float(look_all.mean())
+    look_std_all = float(look_all.std())
+    look_mean_sel = float(look_sel.mean())
+    
+    # Normalized: how much better is selection compared to global mean
+    R_look = (look_mean_sel - look_mean_all) / (look_std_all + 1e-6)
+    
+    # --- R_sakuga: Dynamic sakuga + motion (normalized) ---
+    # Combine sakuga score with motion magnitude if available
+    if motion is not None and len(motion) > 0:
+        # Normalize motion to [0, 1]
+        motion_valid = motion[:len(attrs_all)]
+        motion_min = float(motion_valid.min())
+        motion_max = float(motion_valid.max())
+        motion_range = motion_max - motion_min
+        
+        if motion_range > 1e-8:
+            motion_norm = (motion_valid - motion_min) / motion_range
+        else:
+            motion_norm = np.zeros_like(motion_valid)
+        
+        # Combined score: 50% sakuga + 50% motion
+        sakuga_combined_all = 0.5 * sakuga_all + 0.5 * motion_norm
+        sakuga_combined_sel = sakuga_combined_all[sel_idx_valid]
+        
+        sakuga_mean_all = float(sakuga_combined_all.mean())
+        sakuga_std_all = float(sakuga_combined_all.std())
+        sakuga_mean_sel = float(sakuga_combined_sel.mean())
+    else:
+        # Motion not available, use pure sakuga score
+        sakuga_mean_all = float(sakuga_all.mean())
+        sakuga_std_all = float(sakuga_all.std())
+        sakuga_mean_sel = float(sakuga_sel.mean())
+    
+    R_sakuga = (sakuga_mean_sel - sakuga_mean_all) / (sakuga_std_all + 1e-6)
+    
+    # --- R_story: Narrative beat coverage (fraction of selected frames above threshold) ---
+    # Beat = combination of sakuga + cinematic scores
+    beat_all = 0.5 * sakuga_all + 0.5 * cinema_all
+    beat_mean = float(beat_all.mean())
+    beat_std = float(beat_all.std())
+    
+    # Threshold: mean + 0.5 * std (highlights important beats)
+    beat_threshold = beat_mean + 0.5 * beat_std
+    
+    # Coverage: fraction of selected frames that exceed threshold
+    beat_sel = beat_all[sel_idx_valid]
+    coverage = float((beat_sel > beat_threshold).mean()) if len(beat_sel) > 0 else 0.0
+    R_story = coverage
+    
+    return {
+        "look": float(R_look),
+        "sakuga": float(R_sakuga),
+        "story": float(R_story),
+    }
 
 def prob_separation_reward(probs: np.ndarray, sel_idx: List[int]) -> float:
     """
@@ -108,13 +193,17 @@ def reward_combo(
     w_fd: float = 0.0,
     w_ms: float = 0.0,
     w_motion: float = 0.0,
-    w_anime: float = 0.0,
+    w_anime_look: float = 0.0,
+    w_anime_sakuga: float = 0.0,
+    w_anime_story: float = 0.0,
     w_probsep: float = 0.0,
     ms_swd_scales: int = 3,
     ms_swd_dirs: int = 16,
     use_lpips_div: bool = False,
     lpips_net: str = "alex",
     lpips_device: str = "cuda",
+    reward_stats: Optional[Dict[str, float]] = None,
+    return_components: bool = False,
 ) -> float:
     if len(sel_idx) == 0:
         return 0.0
@@ -139,17 +228,59 @@ def reward_combo(
         # simple average motion on selected indices
         R_mot = float(np.mean(motion[sel_idx]))
 
-    R_anime = 0.0
-    if w_anime != 0.0 and anime_scores is not None:
-        # Default important_ids=(1, 3, 4, 5) -> cinematic, expression, sakuga, sharpness
-        # Assuming anime_scores order: 0=brightness, 1=cinematic, 2=color, 3=expression, 4=sakuga, 5=sharpness
-        # Adjust if your dataset has different order.
-        R_anime = anime_iqa_emphasis(anime_scores, sel_idx)
+    # Anime rewards (unified look-sakuga-story triad)
+    R_anime_look = 0.0
+    R_anime_sakuga = 0.0
+    R_anime_story = 0.0
+    if anime_scores is not None and (w_anime_look != 0.0 or w_anime_sakuga != 0.0 or w_anime_story != 0.0):
+        anime_terms = anime_reward(anime_scores, sel_idx, motion=motion)
+        R_anime_look = anime_terms["look"]
+        R_anime_sakuga = anime_terms["sakuga"]
+        R_anime_story = anime_terms["story"]
 
     R_probsep = 0.0
     if w_probsep != 0.0 and probs is not None:
         R_probsep = prob_separation_reward(probs, sel_idx)
 
-    R = ( w_div*R_div + w_rep*R_rep + w_rec*R_rec + w_fd*R_fd + w_ms*R_ms + w_motion*R_mot 
-          + w_anime*R_anime + w_probsep*R_probsep )
+    # Combine all reward components
+    components = {
+        "div": R_div,
+        "rep": R_rep,
+        "rec": R_rec,
+        "fd": R_fd,
+        "ms": R_ms,
+        "motion": R_mot,
+        "anime_look": R_anime_look,
+        "anime_sakuga": R_anime_sakuga,
+        "anime_story": R_anime_story,
+        "probsep": R_probsep,
+    }
+    
+    # Apply normalization if reward_stats provided
+    if reward_stats is not None:
+        normalized_components = {}
+        for key, val in components.items():
+            std_key = f"{key}_std"
+            sigma = reward_stats.get(std_key, 1.0)
+            normalized_components[key] = val / (sigma + 1e-6)
+        components_for_sum = normalized_components
+    else:
+        components_for_sum = components
+    
+    # Weighted sum
+    R = (
+        w_div * components_for_sum["div"]
+        + w_rep * components_for_sum["rep"]
+        + w_rec * components_for_sum["rec"]
+        + w_fd * components_for_sum["fd"]
+        + w_ms * components_for_sum["ms"]
+        + w_motion * components_for_sum["motion"]
+        + w_anime_look * components_for_sum["anime_look"]
+        + w_anime_sakuga * components_for_sum["anime_sakuga"]
+        + w_anime_story * components_for_sum["anime_story"]
+        + w_probsep * components_for_sum["probsep"]
+    )
+    
+    if return_components:
+        return float(R), components
     return float(R)

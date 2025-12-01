@@ -18,11 +18,11 @@ DEVICE="cuda"
 VAL_VIDEOS_DIR="/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test"
 VAL_OUTPUT_DIR="runs/dsn_track_b_rewards/val_runs"
 
-# Anime-CLIP-IQA
+# Unified Anime Reward Weights (Look-Sakuga-Story Triad)
 USE_ANIME_REWARD=1
-W_LOOK=0.5
-W_SAKUGA=0.7
-W_STORY=0.0
+W_ANIME_LOOK=0.5
+W_ANIME_SAKUGA=0.7
+W_ANIME_STORY=0.0
 
 echo "Configuration:"
 echo "  Dataset: $DATASET_ROOT"
@@ -30,7 +30,7 @@ echo "  Save dir: $SAVE_DIR"
 echo "  Epochs: $EPOCHS"
 echo "  Device: $DEVICE"
 echo "  Anime Reward: ENABLED"
-echo "  Weights: Look=$W_LOOK, Sakuga=$W_SAKUGA, Story=$W_STORY"
+echo "  Weights: Look=$W_ANIME_LOOK, Sakuga=$W_ANIME_SAKUGA, Story=$W_ANIME_STORY"
 echo ""
 
 # Check for anime_attrs.npy
@@ -74,9 +74,9 @@ python -m src.pipeline.train_rl_dsn \
   --motion_fusion_type cross_attention \
   \
   --use_anime_reward $USE_ANIME_REWARD \
-  --w_look $W_LOOK \
-  --w_sakuga $W_SAKUGA \
-  --w_story $W_STORY \
+  --w_anime_look $W_ANIME_LOOK \
+  --w_anime_sakuga $W_ANIME_SAKUGA \
+  --w_anime_story $W_ANIME_STORY \
   \
   --lr 1e-4 \
   --weight_decay 0.0 \
