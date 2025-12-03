@@ -619,6 +619,14 @@ def build_argparser() -> argparse.ArgumentParser:
                     help="Apply seam carving when objects are spread out (default: True).")
     ap.add_argument("--disable_seam_carving", action="store_false", dest="enable_seam_carving",
                     help="Disable seam carving for spread-out objects.")
+    
+    # Prob-based layout priority
+    ap.add_argument("--use_prob_priority", action="store_true", default=True,
+                    help="Use DSN prob scores to prioritize keyframe placement (high prob -> central position).")
+    ap.add_argument("--no_prob_priority", action="store_false", dest="use_prob_priority",
+                    help="Disable prob-based keyframe placement priority.")
+    ap.add_argument("--compare_with_without_prob", action="store_true", default=False,
+                    help="Generate comparison visualization of collage with and without prob-based placement.")
 
     return ap
 
@@ -693,7 +701,7 @@ def main():
     
     if args.checkpoint is not None and os.path.isfile(args.checkpoint):
         print(f"Loading checkpoint from {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=dev)
+        ckpt = torch.load(args.checkpoint, map_location=dev, weights_only=False)
         
         # Check if it's an advanced model checkpoint
         if "model_type" in ckpt and ckpt["model_type"] == "advanced":
@@ -1033,9 +1041,32 @@ def main():
     if len(mask_files) > 12:
         print(f"  [WARN] Many masks, high risk of segfault")
     
+    # === BUILD PROB SCORES DICT ===
+    # Map keyframe filename -> prob score from DSN model
+    # This allows high-prob keyframes to be placed in central/important positions
+    prob_scores = None
+    if args.use_prob_priority:
+        prob_scores = {}
+        for row in key_rows:
+            # Filename format: scene_{scene_id:04d}_frame_{frame_idx:08d}.jpg
+            filename = f"scene_{row['scene_id']:04d}_frame_{row['frame_global']:08d}.jpg"
+            prob_scores[filename] = row['prob']
+        
+        print(f"  Built prob_scores for {len(prob_scores)} keyframes (use_prob_priority=True)")
+        print(f"  Top-5 highest prob keyframes:")
+        for fn, prob in sorted(prob_scores.items(), key=lambda x: -x[1])[:5]:
+            print(f"    {fn}: {prob:.4f}")
+    else:
+        print(f"  Prob-based priority DISABLED (use_prob_priority=False)")
+    
     # Run optimization (this creates slicing_result.json)
+    # Pass prob_scores to prioritize high-prob keyframes in central positions
     try:
-        so.optimization(shape_mask_path, input_mask_folder, colla_output_dir, image_folder=input_image_collection_folder)
+        so.optimization(
+            shape_mask_path, input_mask_folder, colla_output_dir, 
+            image_folder=input_image_collection_folder,
+            prob_scores=prob_scores  # Pass prob scores for priority placement (or None if disabled)
+        )
         print("  ✓ Optimization completed")
     except Exception as e:
         print(f"[ERROR] Optimization failed: {e}")
@@ -1105,11 +1136,111 @@ def main():
             enable_seam_carving=args.enable_seam_carving
         )
         print("  ✓ Rendering completed")
+        
+        # Rename output to indicate this is WITH prob priority
+        if args.use_prob_priority:
+            collage_path = os.path.join(colla_output_dir, 'collage.png')
+            collage_with_prob_path = os.path.join(colla_output_dir, 'collage_with_prob_priority.png')
+            if os.path.exists(collage_path):
+                import shutil
+                shutil.copy(collage_path, collage_with_prob_path)
+                print(f"  ✓ Saved collage with prob priority: {collage_with_prob_path}")
+                
     except Exception as e:
         print(f"[ERROR] Rendering failed: {e}")
         import traceback
         traceback.print_exc()
         raise
+    
+    # ============================================
+    # STEP 8.5b: Comparison - Without Prob Priority (Optional)
+    # ============================================
+    if args.compare_with_without_prob and args.use_prob_priority:
+        print(f"\n[STEP 8.5b] Generating comparison (WITHOUT prob priority)")
+        
+        # Create separate output dir for comparison
+        colla_no_prob_dir = os.path.join(args.out_dir, "colla_layout_no_prob")
+        ensure_dir(colla_no_prob_dir)
+        
+        # Copy shape decomposition results
+        import shutil
+        for f in ['final_cut.json']:
+            src = os.path.join(colla_output_dir, f)
+            if os.path.exists(src):
+                shutil.copy(src, colla_no_prob_dir)
+        
+        # Copy shape mask
+        shape_mask_no_prob = os.path.join(colla_no_prob_dir, "shape_mask_refined.png")
+        shutil.copy(shape_mask_path, shape_mask_no_prob)
+        
+        # Run optimization WITHOUT prob scores
+        try:
+            print("  Running optimization without prob priority...")
+            so.optimization(
+                shape_mask_no_prob, input_mask_folder, colla_no_prob_dir, 
+                image_folder=input_image_collection_folder,
+                prob_scores=None  # No prob priority
+            )
+            
+            # Render collage
+            ca.render_collage(
+                input_image_collection_folder, colla_no_prob_dir, args.scaling_factor,
+                center_salient=args.center_salient, salient_fit_ratio=args.salient_fit_ratio,
+                use_smart_crop=args.use_smart_crop, use_fast_saliency=args.use_fast_saliency,
+                use_object_detection=args.use_object_detection,
+                detection_threshold=args.detection_threshold,
+                enable_seam_carving=args.enable_seam_carving
+            )
+            
+            # Rename output
+            collage_no_prob_path = os.path.join(colla_no_prob_dir, 'collage.png')
+            collage_without_prob_path = os.path.join(colla_output_dir, 'collage_without_prob_priority.png')
+            if os.path.exists(collage_no_prob_path):
+                shutil.copy(collage_no_prob_path, collage_without_prob_path)
+            
+            # Create side-by-side comparison
+            print("  Creating comparison visualization...")
+            collage_with = cv2.imread(os.path.join(colla_output_dir, 'collage_with_prob_priority.png'))
+            collage_without = cv2.imread(collage_without_prob_path)
+            
+            if collage_with is not None and collage_without is not None:
+                # Ensure same height
+                h1, w1 = collage_with.shape[:2]
+                h2, w2 = collage_without.shape[:2]
+                max_h = max(h1, h2)
+                
+                if h1 < max_h:
+                    collage_with = cv2.copyMakeBorder(collage_with, 0, max_h-h1, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
+                if h2 < max_h:
+                    collage_without = cv2.copyMakeBorder(collage_without, 0, max_h-h2, 0, 0, cv2.BORDER_CONSTANT, value=[0,0,0])
+                
+                # Add labels
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                cv2.putText(collage_with, "WITH Prob Priority", (20, 40), font, 1.0, (0, 255, 0), 2)
+                cv2.putText(collage_without, "WITHOUT Prob Priority", (20, 40), font, 1.0, (0, 0, 255), 2)
+                
+                # Add prob info on images (show which has high prob)
+                # Read slicing results to get image positions
+                with open(os.path.join(colla_output_dir, 'slicing_result.json'), 'r') as f:
+                    layout_with = json.load(f)
+                
+                for img_info in layout_with.get('images', []):
+                    filename = img_info['filename']
+                    if filename in prob_scores:
+                        prob = prob_scores[filename]
+                        # Draw prob value near the image position (simplified - just log it)
+                        print(f"    {filename}: prob={prob:.4f}")
+                
+                # Side by side
+                comparison = np.hstack([collage_with, collage_without])
+                comparison_path = os.path.join(colla_output_dir, 'comparison_prob_priority.png')
+                cv2.imwrite(comparison_path, comparison)
+                print(f"  ✓ Comparison saved: {comparison_path}")
+                
+        except Exception as e:
+            print(f"  [WARN] Comparison generation failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     # ============================================
     # STEP 8.6: Evaluation (Optional)
