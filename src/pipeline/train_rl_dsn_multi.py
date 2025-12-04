@@ -141,6 +141,13 @@ def main():
     ap.add_argument("--eval_resize_h", type=int, default=180)
     ap.add_argument("--eval_device", type=str, default=None)
     ap.add_argument("--eval_with_baselines", action="store_true")
+    ap.add_argument("--eval_threshold", type=float, default=None)
+    ap.add_argument("--eval_model_dir", type=str, default=None)
+    ap.add_argument("--eval_weights_path", type=str, default=None)
+    ap.add_argument("--eval_prob_threshold", type=float, default=None)
+    ap.add_argument("--eval_scene_device", type=str, default=None)
+    ap.add_argument("--eval_max_videos", type=int, default=None)
+    ap.add_argument("--eval_num_workers", type=int, default=None)
 
     args = ap.parse_args()
 
@@ -163,8 +170,14 @@ def main():
         model = None
     elif args.model_type == "advanced":
         print("[Model] Using advanced DSN (Attention + Multi-Scale)")
+        # Adjust feat_dim if using anime attributes
+        effective_feat_dim = args.feat_dim
+        if args.use_anime_attrs:
+            effective_feat_dim += args.anime_attrs_dim
+            print(f"[Model] Adjusted feat_dim to {effective_feat_dim} (Base: {args.feat_dim} + Anime: {args.anime_attrs_dim})")
+
         config = DSNConfig(
-            feat_dim=args.feat_dim,
+            feat_dim=effective_feat_dim,
             hidden_dim=args.enc_hidden,
             lstm_hidden=args.lstm_hidden,
             num_attn_heads=args.num_attn_heads,
@@ -229,6 +242,16 @@ def main():
         # Gradient accumulators
         grad_norms_before_clip = []
         grad_norms_after_clip = []
+        
+        # Visualization accumulators
+        all_probs = []
+        all_rewards = []
+        all_motion_feats = []
+        motion_selected = []
+        motion_rejected = []
+        sample_frames_selected = []
+        sample_frames_rejected = []
+        all_gradients = []
 
         # Process in batches (Gradient Accumulation)
         num_batches = (len(all_scene_dirs) + args.batch_size - 1) // args.batch_size
@@ -356,6 +379,35 @@ def main():
                 frame_count_sum += T
                 entropy_sum += float(entropy.item())
                 mean_prob_sum += float(probs.mean().item())
+                
+                # Collect for visualizations
+                all_probs.append(probs.squeeze(0).detach().cpu().numpy())
+                all_rewards.append(R)
+                
+                # Collect motion statistics (if available)
+                if motion_feats_np is not None:
+                    all_motion_feats.append(motion_feats_np)
+                    # Motion at selected vs rejected frames
+                    motion_mag = np.linalg.norm(motion_feats_np, axis=1)  # (T,) magnitude
+                    for idx in sel_idx:
+                        if idx < len(motion_mag):
+                            motion_selected.append(motion_mag[idx])
+                    rejected_idx = [i for i in range(T) if i not in sel_idx]
+                    for idx in rejected_idx:
+                        if idx < len(motion_mag):
+                            motion_rejected.append(motion_mag[idx])
+                
+                # Collect sample frames for visualization (first scene of epoch)
+                if len(sample_frames_selected) == 0 and frames is not None and len(sel_idx) > 0:
+                    # Get up to 8 selected frames
+                    for idx in sel_idx[:8]:
+                        if idx < len(frames):
+                            sample_frames_selected.append(frames[idx])
+                    # Get up to 8 rejected frames
+                    rejected_idx = [i for i in range(T) if i not in sel_idx]
+                    for idx in rejected_idx[:8]:
+                        if idx < len(frames):
+                            sample_frames_rejected.append(frames[idx])
 
             if valid_scenes_in_batch > 0:
                 # Gradient monitoring & clipping
@@ -404,6 +456,88 @@ def main():
             writer.add_scalar('gradients/norm_before_clip_mean', np.mean(grad_norms_before_clip), epoch)
             writer.add_scalar('gradients/clip_ratio', np.mean(grad_norms_after_clip) / (np.mean(grad_norms_before_clip) + 1e-8), epoch)
 
+        # Add probability histogram
+        if all_probs:
+            all_probs_concat = np.concatenate(all_probs)
+            writer.add_histogram('train/prob_distribution', all_probs_concat, epoch)
+            writer.add_scalar('train/prob_std', float(np.std(all_probs_concat)), epoch)
+        
+        # Add reward distribution
+        if all_rewards:
+            writer.add_histogram('train/reward_distribution', np.array(all_rewards), epoch)
+            writer.add_scalar("train/reward_std", float(np.std(all_rewards)), epoch)
+            writer.add_scalar("train/reward_min", float(np.min(all_rewards)), epoch)
+            writer.add_scalar("train/reward_max", float(np.max(all_rewards)), epoch)
+        
+        # Motion-related visualizations (if motion is enabled)
+        if args.use_raft_motion and all_motion_feats:
+            # Concatenate all motion features
+            all_motion_concat = np.concatenate(all_motion_feats, axis=0)  # (N_total, D_m)
+            
+            # Motion magnitude statistics
+            motion_magnitudes = np.linalg.norm(all_motion_concat, axis=1)
+            writer.add_scalar('motion/mean_magnitude', float(np.mean(motion_magnitudes)), epoch)
+            writer.add_scalar('motion/std_magnitude', float(np.std(motion_magnitudes)), epoch)
+            writer.add_scalar('motion/max_magnitude', float(np.max(motion_magnitudes)), epoch)
+            writer.add_histogram('motion/magnitude_distribution', motion_magnitudes, epoch)
+            
+            # Motion feature statistics per dimension
+            motion_mean_per_dim = np.mean(all_motion_concat, axis=0)  # (D_m,)
+            motion_std_per_dim = np.std(all_motion_concat, axis=0)  # (D_m,)
+            writer.add_histogram('motion/feature_means', motion_mean_per_dim, epoch)
+            writer.add_histogram('motion/feature_stds', motion_std_per_dim, epoch)
+            
+            # Motion at selected vs rejected frames
+            if motion_selected and motion_rejected:
+                writer.add_scalar('motion/selected_mean', float(np.mean(motion_selected)), epoch)
+                writer.add_scalar('motion/rejected_mean', float(np.mean(motion_rejected)), epoch)
+                writer.add_scalar('motion/selection_ratio', 
+                                float(np.mean(motion_selected) / (np.mean(motion_rejected) + 1e-8)), epoch)
+                writer.add_histogram('motion/selected_magnitude', np.array(motion_selected), epoch)
+                writer.add_histogram('motion/rejected_magnitude', np.array(motion_rejected), epoch)
+                
+                tqdm.write(f"  Motion: selected={np.mean(motion_selected):.4f}, "
+                          f"rejected={np.mean(motion_rejected):.4f}, "
+                          f"ratio={np.mean(motion_selected)/(np.mean(motion_rejected)+1e-8):.2f}")
+        
+        # Visualize sample frames (selected vs rejected)
+        if sample_frames_selected:
+            # Create grid of selected frames
+            selected_grid = []
+            for frm in sample_frames_selected[:8]:
+                # Resize to small size for visualization
+                frm_small = cv2.resize(frm, (160, 90))
+                # Convert BGR to RGB
+                frm_rgb = cv2.cvtColor(frm_small, cv2.COLOR_BGR2RGB)
+                selected_grid.append(frm_rgb)
+            
+            if selected_grid:
+                # Stack into grid (2 rows x 4 cols)
+                grid_tensor = torch.from_numpy(np.array(selected_grid)).permute(0, 3, 1, 2).float() / 255.0
+                writer.add_images('frames/selected_keyframes', grid_tensor, epoch, dataformats='NCHW')
+        
+        if sample_frames_rejected:
+            rejected_grid = []
+            for frm in sample_frames_rejected[:8]:
+                frm_small = cv2.resize(frm, (160, 90))
+                frm_rgb = cv2.cvtColor(frm_small, cv2.COLOR_BGR2RGB)
+                rejected_grid.append(frm_rgb)
+            
+            if rejected_grid:
+                grid_tensor = torch.from_numpy(np.array(rejected_grid)).permute(0, 3, 1, 2).float() / 255.0
+                writer.add_images('frames/rejected_frames', grid_tensor, epoch, dataformats='NCHW')
+        
+        # Log cache statistics for advanced model
+        if args.model_type == "advanced" and args.use_cache:
+            cache_stats = model.get_cache_stats()
+            if cache_stats:
+                writer.add_scalar('cache/hit_rate', cache_stats['hit_rate'], epoch)
+                writer.add_scalar('cache/hits', cache_stats['hits'], epoch)
+                writer.add_scalar('cache/misses', cache_stats['misses'], epoch)
+                writer.add_scalar('cache/size', cache_stats['cache_size'], epoch)
+                tqdm.write(f"  Cache: hit_rate={cache_stats['hit_rate']:.2%} "
+                          f"({cache_stats['hits']}/{cache_stats['total_queries']} hits)")
+
         # Save Checkpoint
         ckpt_path = save_dir / f"dsn_checkpoint_ep{epoch}.pt"
         if args.model_type == "baseline":
@@ -414,6 +548,75 @@ def main():
                 "config": config,
                 "model_type": "advanced"
             }, ckpt_path)
+
+        # validate per epoch
+        if args.val_videos_dir and args.val_output_dir and (epoch % args.validate_every == 0):
+            val_out = Path(args.val_output_dir) / f"ep{epoch}"
+            val_out.mkdir(parents=True, exist_ok=True)
+            cmd = [
+                "python", "-m", "eval.batch_eval",
+                "--videos_dir", args.val_videos_dir,
+                "--output_dir", str(val_out),
+                "--checkpoint", str(ckpt_path),
+                "--device", eval_device,  # Add device for DSN inference
+                "--feat_dim", str(args.feat_dim),
+                "--enc_hidden", str(args.enc_hidden),
+                "--lstm_hidden", str(args.lstm_hidden),
+                "--budget_ratio", str(args.budget_ratio),
+                "--Bmin", str(args.Bmin),
+                "--Bmax", str(args.Bmax),
+                "--sample_stride", str(args.eval_sample_stride),
+                "--resize_w", str(args.eval_resize_w),
+                "--resize_h", str(args.eval_resize_h),
+                "--embedder", args.eval_embedder,
+                "--backend", args.eval_backend,
+                "--eval_device", eval_device,  # Device for evaluation metrics
+            ]
+            # Detector-specific
+            if args.eval_threshold is not None:
+                cmd += ["--threshold", str(args.eval_threshold)]
+            if args.eval_model_dir:
+                cmd += ["--model_dir", args.eval_model_dir]
+            if args.eval_weights_path:
+                cmd += ["--weights_path", args.eval_weights_path]
+            if args.eval_prob_threshold is not None:
+                cmd += ["--prob_threshold", str(args.eval_prob_threshold)]
+            if args.eval_scene_device:
+                cmd += ["--scene_device", args.eval_scene_device]
+            # Anime-CLIP-IQA arguments (if used during training)
+            if args.use_anime_attrs:
+                cmd += ["--use_anime_attrs", str(args.use_anime_attrs)]
+            if args.anime_attrs_dim:
+                cmd += ["--anime_attrs_dim", str(args.anime_attrs_dim)]
+            # Baseline switch
+            if args.eval_with_baselines:
+                cmd.append("--with_baselines")
+            # Optional batch controls
+            if args.eval_max_videos is not None:
+                cmd += ["--max_videos", str(args.eval_max_videos)]
+            if args.eval_num_workers is not None:
+                cmd += ["--num_workers", str(args.eval_num_workers)]
+
+            tqdm.write("[Validate] Running batch_eval...")
+            r = subprocess.run(cmd, capture_output=True, text=True)
+            if r.returncode != 0:
+                tqdm.write(f"[Validate][Error] {r.stderr}")
+            else:
+                summary_path = val_out / "summary_results.json"
+                if summary_path.exists():
+                    with open(summary_path, "r", encoding="utf-8") as f:
+                        s = json.load(f)
+                    agg = s.get("aggregate_metrics", {})
+                    # log a few reliable metrics
+                    for k, v in agg.items():
+                        if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                            writer.add_scalar(f"val/{k}", float(v), epoch)
+                    # track best (example: minimize RecErr_mean; tie-break by Frechet_mean)
+                    rec_mean = agg.get("RecErr_mean", None)
+                    if isinstance(rec_mean, (int, float)) and not np.isnan(rec_mean):
+                        if (best_metric is None) or (rec_mean < best_metric):
+                            best_metric = rec_mean
+                            best_ckpt_path = str(ckpt_path)
 
     writer.close()
     print("Training done.")

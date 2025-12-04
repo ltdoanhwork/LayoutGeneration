@@ -10,7 +10,7 @@ echo "=========================================="
 
 # Configuration matching train_track_b.sh
 CHECKPOINT_DIR="runs/dsn_track_b_rewards"
-CHECKPOINT_PATH="${CHECKPOINT_DIR}/dsn_checkpoint_ep20.pt"
+CHECKPOINT_PATH="${CHECKPOINT_DIR}/dsn_checkpoint_ep9.pt"
 VAL_VIDEOS_DIR="/home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test"
 OUTPUT_DIR="runs/eval_track_b_rewards"
 DEVICE="cuda"

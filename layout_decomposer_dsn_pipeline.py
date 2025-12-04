@@ -7,6 +7,7 @@ Layout Decomposer Pipeline with DSN-based Keyframe Extraction
 - Keyframe selection via DSN (Deep Summarization Network)
 - Cartoon character detection (optional)
 - Colla layout decomposition and collage assembly
+- Supports both video input and image list/folder input
 - Outputs:
     * scenes.json / keyframes.csv / all_probs.csv
     * keyframes/ (exported JPGs)
@@ -18,8 +19,10 @@ from __future__ import annotations
 import os
 import csv
 import json
+import glob
 import argparse
 import sys
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
@@ -517,7 +520,14 @@ def build_argparser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         description="Layout Decomposer Pipeline with DSN-based keyframe extraction."
     )
-    ap.add_argument("--video", type=str, required=True, help="Input video path.")
+    
+    # Input mode: either video or image list
+    ap.add_argument("--video", type=str, default=None, help="Input video path.")
+    ap.add_argument("--image_list", type=str, default=None, 
+                    help="Path to text file containing image paths (one per line). "
+                         "Use this instead of --video for processing existing images.")
+    ap.add_argument("--image_folder", type=str, default=None,
+                    help="Path to folder containing images. Use this instead of --video.")
     ap.add_argument("--out_dir", type=str, required=True, help="Output directory.")
 
     # Scene detection backend + params
@@ -632,15 +642,70 @@ def build_argparser() -> argparse.ArgumentParser:
 
 
 # ------------------------------
+# Helper: Load images from list or folder
+# ------------------------------
+def load_images_from_source(image_list_path: Optional[str], image_folder: Optional[str]) -> Tuple[List[str], str]:
+    """
+    Load image paths from either a text file or folder.
+    Returns (list of image paths, source name for output folder naming).
+    """
+    images = []
+    source_name = "images"
+    
+    if image_list_path:
+        if not os.path.isfile(image_list_path):
+            raise FileNotFoundError(f"Image list file not found: {image_list_path}")
+        
+        with open(image_list_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    if os.path.isfile(line):
+                        images.append(line)
+                    else:
+                        print(f"  [WARN] Image not found, skipping: {line}")
+        
+        source_name = Path(image_list_path).stem
+        print(f"Loaded {len(images)} images from list file: {image_list_path}")
+    
+    elif image_folder:
+        if not os.path.isdir(image_folder):
+            raise NotADirectoryError(f"Image folder not found: {image_folder}")
+        
+        extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.tif']
+        for ext in extensions:
+            images.extend(glob.glob(os.path.join(image_folder, f'*{ext}')))
+            images.extend(glob.glob(os.path.join(image_folder, f'*{ext.upper()}')))
+        
+        images = sorted(images)
+        source_name = Path(image_folder).name
+        print(f"Found {len(images)} images in folder: {image_folder}")
+    
+    return images, source_name
+
+
+# ------------------------------
 # Main
 # ------------------------------
 def main():
     args = build_argparser().parse_args()
     
+    # Determine input mode: video or images
+    is_image_mode = args.image_list is not None or args.image_folder is not None
+    
+    if not is_image_mode and args.video is None:
+        print("Error: Must provide either --video, --image_list, or --image_folder")
+        return
+    
     # Create unique output directory with timestamp to avoid overwriting
-    video_name = args.video.split('/')[-1].split('.')[0]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    args.out_dir = f"{args.out_dir}_{video_name}_{timestamp}"
+    if is_image_mode:
+        _, source_name = load_images_from_source(args.image_list, args.image_folder)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.out_dir = f"{args.out_dir}_{source_name}_{timestamp}"
+    else:
+        video_name = args.video.split('/')[-1].split('.')[0]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        args.out_dir = f"{args.out_dir}_{video_name}_{timestamp}"
 
     # Prepare output folders
     ensure_dir(args.out_dir)
@@ -653,268 +718,414 @@ def main():
         print("[layout_decomposer_dsn_pipeline] CUDA not available, falling back to CPU.")
         dev = "cpu"
 
-    video_path = args.video
     out_dir = Path(args.out_dir)
-
-    # Read basic video info
-    cap = cv2.VideoCapture(video_path)
-    fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
-    cap.release()
-
-    # 1) Scene detection
-    print("\n" + "="*80)
-    print("STEP 1: SCENE DETECTION")
-    print("="*80)
     
-    det_kwargs: Dict[str, Any] = {
-        "threshold": args.threshold,
-        "model_dir": args.model_dir,
-        "weights_path": args.weights_path,
-        "prob_threshold": args.prob_threshold,
-        "device": args.scene_device,
-    }
-    det_kwargs = {k: v for k, v in det_kwargs.items() if v not in (None, "", [])}
-    
-    scenes = detect_scenes_generic(video_path, args.backend, min_scene_len=args.min_scene_len, **det_kwargs)
-    print(f"Detected {len(scenes)} scenes")
-
-    # 2) Build embedder
-    print("\n" + "="*80)
-    print("STEP 2: BUILD EMBEDDER")
-    print("="*80)
-    
-    encode, emb_dim = build_embedder(args.embedder, device=dev)
-    
-    # If feat_dim not specified, infer from embedder
-    if args.feat_dim <= 0:
-        args.feat_dim = emb_dim
-        print(f"feat_dim not set, using emb_dim={emb_dim} from embedder '{args.embedder}'.")
-    
-    # 3) Load DSN model
-    print("\n" + "="*80)
-    print("STEP 3: LOAD DSN MODEL")
-    print("="*80)
-    
-    model_type = "baseline"
-    enc, pol, model = None, None, None
-    use_anime_attrs_auto = False
-    
-    if args.checkpoint is not None and os.path.isfile(args.checkpoint):
-        print(f"Loading checkpoint from {args.checkpoint}")
-        ckpt = torch.load(args.checkpoint, map_location=dev, weights_only=False)
+    # =========================================================================
+    # IMAGE MODE: Process list of images directly (no video, no scene detection)
+    # =========================================================================
+    if is_image_mode:
+        print("\n" + "="*80)
+        print("IMAGE MODE: Processing image list/folder")
+        print("="*80)
         
-        # Check if it's an advanced model checkpoint
-        if "model_type" in ckpt and ckpt["model_type"] == "advanced":
-            model_type = "advanced"
-            print("Detected advanced DSN model")
-            config = ckpt["config"]
+        images, source_name = load_images_from_source(args.image_list, args.image_folder)
+        
+        if not images:
+            print("Error: No valid images found")
+            return
+        
+        # Copy images to keyframes folder
+        import shutil
+        print(f"\nCopying {len(images)} images to keyframes folder...")
+        for i, img_path in enumerate(images):
+            dst = os.path.join(key_dir, f"image_{i:04d}_{Path(img_path).name}")
+            shutil.copy(img_path, dst)
+        
+        # Create dummy scene and keyframe data
+        scene_rows = [{"scene_id": 0, "start_frame": 0, "end_frame": len(images)-1, "num_images": len(images)}]
+        key_rows = []
+        
+        # Build embedder
+        print("\n" + "="*80)
+        print("STEP: BUILD EMBEDDER")
+        print("="*80)
+        encode, emb_dim = build_embedder(args.embedder, device=dev)
+        if args.feat_dim <= 0:
+            args.feat_dim = emb_dim
+        
+        # Load and encode images
+        print("\n" + "="*80)
+        print("STEP: ENCODE IMAGES")
+        print("="*80)
+        
+        frames = []
+        resize_tuple = (args.resize_w, args.resize_h)
+        for img_path in tqdm(images, desc="Loading images"):
+            img = cv2.imread(img_path)
+            if img is not None:
+                img = cv2.resize(img, resize_tuple)
+                frames.append(img)
+        
+        if not frames:
+            print("Error: Could not load any images")
+            return
+        
+        feats = encode(frames)  # (N, D)
+        T = feats.shape[0]
+        print(f"Encoded {T} images with feature dim {feats.shape[1]}")
+        
+        # Load DSN model and compute probs
+        print("\n" + "="*80)
+        print("STEP: DSN PROBABILITY SCORING")
+        print("="*80)
+        
+        model_type = "baseline"
+        use_anime_attrs_auto = False
+        
+        if args.checkpoint is not None and os.path.isfile(args.checkpoint):
+            print(f"Loading checkpoint from {args.checkpoint}")
+            ckpt = torch.load(args.checkpoint, map_location=dev, weights_only=False)
             
-            # Auto-detect if anime_attrs were used in training
-            if config.feat_dim > emb_dim:
-                use_anime_attrs_auto = True
-                print(f"Auto-detected Anime-CLIP-IQA (feat_dim={config.feat_dim} > emb_dim={emb_dim})")
-                args.use_anime_attrs = 1
-                args.anime_attrs_dim = config.feat_dim - emb_dim
-            
-            model = DSNAdvanced(config).to(dev).eval()
-            model.load_state_dict(ckpt["model"])
-            print(f"  Config: {config}")
-            print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+            if "model_type" in ckpt and ckpt["model_type"] == "advanced":
+                model_type = "advanced"
+                print("Detected advanced DSN model")
+                config = ckpt["config"]
+                model = DSNAdvanced(config).to(dev).eval()
+                model.load_state_dict(ckpt["model"])
+            else:
+                model_type = "baseline"
+                enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
+                pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
+                enc.load_state_dict(ckpt["encoder"])
+                pol.load_state_dict(ckpt["policy"])
         else:
-            # Baseline model
-            model_type = "baseline"
-            print("Detected baseline DSN model")
+            print("No checkpoint → using uniform probabilities")
             enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
             pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
-            enc.load_state_dict(ckpt["encoder"])
-            pol.load_state_dict(ckpt["policy"])
-    else:
-        # No checkpoint: use baseline
-        print("No valid checkpoint provided → using randomly initialized baseline DSN (untrained).")
-        model_type = "baseline"
-        enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
-        pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
-
-    # 4) Per-scene DSN inference
-    print("\n" + "="*80)
-    print("STEP 4: DSN KEYFRAME SELECTION")
-    print("="*80)
-    
-    scene_rows: List[Dict[str, Any]] = []
-    key_rows: List[Dict[str, Any]] = []
-    all_prob_rows: List[Dict[str, Any]] = []
-    
-    # Track all selected keyframe indices and scene IDs for export
-    selected_keyframe_indices = []
-    selected_scene_ids = []
-
-    resize_tuple = (args.resize_w, args.resize_h)
-
-    for sid, sc in enumerate(tqdm(scenes, desc="Processing scenes")):
-        s = int(sc.start_frame)
-        e = int(sc.end_frame)
-        if e < s:
-            continue
-
-        frames, gidx = grab_frames(video_path, s, e, args.sample_stride, resize_tuple)
-        if not frames:
-            continue
-
-        feats = encode(frames)  # (T, D)
         
-        # Compute and concatenate anime_attrs if needed
-        if args.use_anime_attrs:
-            try:
-                anime_attrs = compute_anime_attrs(frames, device=dev)  # (T, K)
-                # Align T
-                T_min = min(len(feats), len(anime_attrs))
-                feats = np.concatenate([feats[:T_min], anime_attrs[:T_min]], axis=1)
-            except Exception as e:
-                print(f"  [Warning] Failed to compute anime attrs: {e}")
-        
-        T = feats.shape[0]
-        if T == 0:
-            continue
-
-        # Convert to torch, run DSN
+        # Compute probabilities
         x = torch.from_numpy(feats).unsqueeze(0).to(dev)  # (1, T, D)
         with torch.no_grad():
             if model_type == "baseline":
-                h = enc(x)                  # (1, T, H)
-                probs = pol(h).squeeze(0)   # (T,)
-            else:  # advanced
-                scene_id = f"scene_{sid}"
-                probs = model(x, scene_id=scene_id).squeeze(0)  # (T,)
+                h = enc(x)
+                probs = pol(h).squeeze(0)
+            else:
+                probs = model(x, scene_id="images").squeeze(0)
             probs = torch.clamp(probs, 1e-6, 1 - 1e-6)
         probs_np = probs.cpu().numpy().astype(np.float32)
-
+        
+        # Select keyframes by budget
         sel_local = select_by_budget(
             probs_np,
-            T=len(frames),
+            T=T,
             budget_ratio=args.budget_ratio,
             Bmin=args.Bmin,
             Bmax=args.Bmax,
         )
         
-        # Save ALL frame probabilities (for visualization)
-        for li in range(len(frames)):
-            gi = gidx[li]
-            all_prob_rows.append(
-                {
-                    "scene_id": sid,
-                    "frame_global": int(gi),
-                    "frame_in_scene": int(li),
-                    "time": timecode_from_frame(gi, fps),
-                    "prob": float(probs_np[li]),
-                    "selected": int(li in sel_local),
-                }
-            )
-
-        # Save only selected keyframes
+        print(f"Selected {len(sel_local)} keyframes from {T} images")
+        
+        # Build keyframe rows
+        keyframe_files = sorted(os.listdir(key_dir))
         for li in sel_local:
-            gi = gidx[li]
-            key_rows.append(
-                {
-                    "scene_id": sid,
-                    "frame_global": int(gi),
-                    "frame_in_scene": int(li),
-                    "time": timecode_from_frame(gi, fps),
+            if li < len(keyframe_files):
+                key_rows.append({
+                    "scene_id": 0,
+                    "frame_global": li,
+                    "frame_in_scene": li,
+                    "time": "00:00:00.000",
                     "prob": float(probs_np[li]),
-                }
-            )
-            selected_keyframe_indices.append(gi)
-            selected_scene_ids.append(sid)
+                    "filename": keyframe_files[li],
+                })
+        
+        # Save outputs
+        with open(out_dir / "scenes.json", "w", encoding="utf-8") as f:
+            json.dump(scene_rows, f, indent=2, ensure_ascii=False)
+        
+        with open(out_dir / "keyframes.csv", "w", newline="", encoding="utf-8") as f:
+            if key_rows:
+                writer = csv.DictWriter(f, fieldnames=key_rows[0].keys())
+                writer.writeheader()
+                writer.writerows(key_rows)
+        
+        print(f"\nSaved {len(key_rows)} keyframes info")
+        
+        # Set fps for Colla pipeline
+        fps = 30.0  # Dummy fps for image mode
+        video_path = None  # No video in image mode
+        
+        # Skip video processing, go directly to Colla pipeline
+        # (key_rows and key_dir are already set)
 
-        scene_rows.append(
-            {
-                "scene_id": sid,
-                "start_frame": int(s),
-                "end_frame": int(e),
-                "start_time": timecode_from_frame(int(s), fps),
-                "end_time": timecode_from_frame(int(e), fps),
-                "duration_frames": int(e - s + 1),
-                "duration_seconds": round((e - s + 1) / fps, 3) if fps > 0 else 0.0,
-            }
-        )
+    # =========================================================================
+    # VIDEO MODE: Original pipeline with scene detection
+    # =========================================================================
+    else:
+        video_path = args.video
 
-    # 5) Save outputs
-    print("\n" + "="*80)
-    print("STEP 5: SAVE OUTPUTS")
-    print("="*80)
-    
-    with open(out_dir / "scenes.json", "w", encoding="utf-8") as f:
-        json.dump(scene_rows, f, indent=2, ensure_ascii=False)
+        # Read basic video info
+        cap = cv2.VideoCapture(video_path)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+        cap.release()
 
-    with open(out_dir / "keyframes.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["scene_id", "frame_global", "frame_in_scene", "time", "prob"],
-        )
-        writer.writeheader()
-        for r in key_rows:
-            writer.writerow(r)
-    
-    # Save ALL frame probabilities for visualization
-    with open(out_dir / "all_probs.csv", "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["scene_id", "frame_global", "frame_in_scene", "time", "prob", "selected"],
-        )
-        writer.writeheader()
-        for r in all_prob_rows:
-            writer.writerow(r)
-
-    print(f"Scenes: {len(scene_rows)}, Keyframes: {len(key_rows)}, All frames: {len(all_prob_rows)}")
-
-    # 6) Export keyframe images
-    print("\n" + "="*80)
-    print("STEP 6: EXPORT KEYFRAME IMAGES")
-    print("="*80)
-    
-    export_keyframe_images(
-        video_path=video_path,
-        keyframe_indices=selected_keyframe_indices,
-        scene_ids=selected_scene_ids,
-        out_dir=key_dir,
-        jpeg_quality=args.key_jpeg_quality,
-    )
-    print(f"Exported {len(selected_keyframe_indices)} keyframe images to {key_dir}")
-
-    # 7) Run cartoon character detection pipeline (optional)
-    detection_results = None
-    if args.run_object_free_pipeline:
+        # 1) Scene detection
         print("\n" + "="*80)
-        print("STEP 7: CARTOON CHARACTER DETECTION")
+        print("STEP 1: SCENE DETECTION")
         print("="*80)
         
-        # Determine device for detection
-        detection_device_str = args.detection_device or args.device or "cuda"
+        det_kwargs: Dict[str, Any] = {
+            "threshold": args.threshold,
+            "model_dir": args.model_dir,
+            "weights_path": args.weights_path,
+            "prob_threshold": args.prob_threshold,
+            "device": args.scene_device,
+        }
+        det_kwargs = {k: v for k, v in det_kwargs.items() if v not in (None, "", [])}
         
-        # Create base output directory for detection results
-        detection_base_dir = os.path.join(args.out_dir, "cartoon_detection")
-        ensure_dir(detection_base_dir)
+        scenes = detect_scenes_generic(video_path, args.backend, min_scene_len=args.min_scene_len, **det_kwargs)
+        print(f"Detected {len(scenes)} scenes")
+
+        # 2) Build embedder
+        print("\n" + "="*80)
+        print("STEP 2: BUILD EMBEDDER")
+        print("="*80)
         
-        try:
-            detection_results = run_cartoon_detection_pipeline(
-                keyframes_folder=key_dir,
-                output_base=detection_base_dir,
-                device=detection_device_str,
-                config_path=args.detection_config or "objectfree/detector_config.yaml"
+        encode, emb_dim = build_embedder(args.embedder, device=dev)
+        
+        # If feat_dim not specified, infer from embedder
+        if args.feat_dim <= 0:
+            args.feat_dim = emb_dim
+            print(f"feat_dim not set, using emb_dim={emb_dim} from embedder '{args.embedder}'.")
+        
+        # 3) Load DSN model
+        print("\n" + "="*80)
+        print("STEP 3: LOAD DSN MODEL")
+        print("="*80)
+        
+        model_type = "baseline"
+        enc, pol, model = None, None, None
+        use_anime_attrs_auto = False
+        
+        if args.checkpoint is not None and os.path.isfile(args.checkpoint):
+            print(f"Loading checkpoint from {args.checkpoint}")
+            ckpt = torch.load(args.checkpoint, map_location=dev, weights_only=False)
+            
+            # Check if it's an advanced model checkpoint
+            if "model_type" in ckpt and ckpt["model_type"] == "advanced":
+                model_type = "advanced"
+                print("Detected advanced DSN model")
+                config = ckpt["config"]
+                
+                # Auto-detect if anime_attrs were used in training
+                if config.feat_dim > emb_dim:
+                    use_anime_attrs_auto = True
+                    print(f"Auto-detected Anime-CLIP-IQA (feat_dim={config.feat_dim} > emb_dim={emb_dim})")
+                    args.use_anime_attrs = 1
+                    args.anime_attrs_dim = config.feat_dim - emb_dim
+                
+                model = DSNAdvanced(config).to(dev).eval()
+                model.load_state_dict(ckpt["model"])
+                print(f"  Config: {config}")
+                print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+            else:
+                # Baseline model
+                model_type = "baseline"
+                print("Detected baseline DSN model")
+                enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
+                pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
+                enc.load_state_dict(ckpt["encoder"])
+                pol.load_state_dict(ckpt["policy"])
+        else:
+            # No checkpoint: use baseline
+            print("No valid checkpoint provided → using randomly initialized baseline DSN (untrained).")
+            model_type = "baseline"
+            enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
+            pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
+
+        # 4) Per-scene DSN inference
+        print("\n" + "="*80)
+        print("STEP 4: DSN KEYFRAME SELECTION")
+        print("="*80)
+        
+        scene_rows: List[Dict[str, Any]] = []
+        key_rows: List[Dict[str, Any]] = []
+        all_prob_rows: List[Dict[str, Any]] = []
+        
+        # Track all selected keyframe indices and scene IDs for export
+        selected_keyframe_indices = []
+        selected_scene_ids = []
+
+        resize_tuple = (args.resize_w, args.resize_h)
+
+        for sid, sc in enumerate(tqdm(scenes, desc="Processing scenes")):
+            s = int(sc.start_frame)
+            e = int(sc.end_frame)
+            if e < s:
+                continue
+
+            frames, gidx = grab_frames(video_path, s, e, args.sample_stride, resize_tuple)
+            if not frames:
+                continue
+
+            feats = encode(frames)  # (T, D)
+            
+            # Compute and concatenate anime_attrs if needed
+            if args.use_anime_attrs:
+                try:
+                    anime_attrs = compute_anime_attrs(frames, device=dev)  # (T, K)
+                    # Align T
+                    T_min = min(len(feats), len(anime_attrs))
+                    feats = np.concatenate([feats[:T_min], anime_attrs[:T_min]], axis=1)
+                except Exception as e:
+                    print(f"  [Warning] Failed to compute anime attrs: {e}")
+            
+            T = feats.shape[0]
+            if T == 0:
+                continue
+
+            # Convert to torch, run DSN
+            x = torch.from_numpy(feats).unsqueeze(0).to(dev)  # (1, T, D)
+            with torch.no_grad():
+                if model_type == "baseline":
+                    h = enc(x)                  # (1, T, H)
+                    probs = pol(h).squeeze(0)   # (T,)
+                else:  # advanced
+                    scene_id = f"scene_{sid}"
+                    probs = model(x, scene_id=scene_id).squeeze(0)  # (T,)
+                probs = torch.clamp(probs, 1e-6, 1 - 1e-6)
+            probs_np = probs.cpu().numpy().astype(np.float32)
+
+            sel_local = select_by_budget(
+                probs_np,
+                T=len(frames),
+                budget_ratio=args.budget_ratio,
+                Bmin=args.Bmin,
+                Bmax=args.Bmax,
             )
             
-            if detection_results:
-                print(f"\n[SUCCESS] Cartoon detection completed!")
-                print(f"  • Results: {detection_results['output_dir']}")
-                print(f"  • Images processed: {detection_results['total_images']}")
-                print(f"  • Total detections: {detection_results['total_detections']}")
-            else:
-                print(f"[WARN] Cartoon detection failed!")
-                
-        except Exception as e:
-            print(f"[ERROR] Cartoon detection failed: {e}")
-            import traceback
-            traceback.print_exc()
+            # Save ALL frame probabilities (for visualization)
+            for li in range(len(frames)):
+                gi = gidx[li]
+                all_prob_rows.append(
+                    {
+                        "scene_id": sid,
+                        "frame_global": int(gi),
+                        "frame_in_scene": int(li),
+                        "time": timecode_from_frame(gi, fps),
+                        "prob": float(probs_np[li]),
+                        "selected": int(li in sel_local),
+                    }
+                )
 
+            # Save only selected keyframes
+            for li in sel_local:
+                gi = gidx[li]
+                key_rows.append(
+                    {
+                        "scene_id": sid,
+                        "frame_global": int(gi),
+                        "frame_in_scene": int(li),
+                        "time": timecode_from_frame(gi, fps),
+                        "prob": float(probs_np[li]),
+                    }
+                )
+                selected_keyframe_indices.append(gi)
+                selected_scene_ids.append(sid)
+
+            scene_rows.append(
+                {
+                    "scene_id": sid,
+                    "start_frame": int(s),
+                    "end_frame": int(e),
+                    "start_time": timecode_from_frame(int(s), fps),
+                    "end_time": timecode_from_frame(int(e), fps),
+                    "duration_frames": int(e - s + 1),
+                    "duration_seconds": round((e - s + 1) / fps, 3) if fps > 0 else 0.0,
+                }
+            )
+
+        # 5) Save outputs
+        print("\n" + "="*80)
+        print("STEP 5: SAVE OUTPUTS")
+        print("="*80)
+        
+        with open(out_dir / "scenes.json", "w", encoding="utf-8") as f:
+            json.dump(scene_rows, f, indent=2, ensure_ascii=False)
+
+        with open(out_dir / "keyframes.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["scene_id", "frame_global", "frame_in_scene", "time", "prob"],
+            )
+            writer.writeheader()
+            for r in key_rows:
+                writer.writerow(r)
+        
+        # Save ALL frame probabilities for visualization
+        with open(out_dir / "all_probs.csv", "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["scene_id", "frame_global", "frame_in_scene", "time", "prob", "selected"],
+            )
+            writer.writeheader()
+            for r in all_prob_rows:
+                writer.writerow(r)
+
+        print(f"Scenes: {len(scene_rows)}, Keyframes: {len(key_rows)}, All frames: {len(all_prob_rows)}")
+
+        # 6) Export keyframe images
+        print("\n" + "="*80)
+        print("STEP 6: EXPORT KEYFRAME IMAGES")
+        print("="*80)
+        
+        export_keyframe_images(
+            video_path=video_path,
+            keyframe_indices=selected_keyframe_indices,
+            scene_ids=selected_scene_ids,
+            out_dir=key_dir,
+            jpeg_quality=args.key_jpeg_quality,
+        )
+        print(f"Exported {len(selected_keyframe_indices)} keyframe images to {key_dir}")
+
+        # 7) Run cartoon character detection pipeline (optional)
+        detection_results = None
+        if args.run_object_free_pipeline:
+            print("\n" + "="*80)
+            print("STEP 7: CARTOON CHARACTER DETECTION")
+            print("="*80)
+            
+            # Determine device for detection
+            detection_device_str = args.detection_device or args.device or "cuda"
+            
+            # Create base output directory for detection results
+            detection_base_dir = os.path.join(args.out_dir, "cartoon_detection")
+            ensure_dir(detection_base_dir)
+            
+            try:
+                detection_results = run_cartoon_detection_pipeline(
+                    keyframes_folder=key_dir,
+                    output_base=detection_base_dir,
+                    device=detection_device_str,
+                    config_path=args.detection_config or "objectfree/detector_config.yaml"
+                )
+                
+                if detection_results:
+                    print(f"\n[SUCCESS] Cartoon detection completed!")
+                    print(f"  • Results: {detection_results['output_dir']}")
+                    print(f"  • Images processed: {detection_results['total_images']}")
+                    print(f"  • Total detections: {detection_results['total_detections']}")
+                else:
+                    print(f"[WARN] Cartoon detection failed!")
+                    
+            except Exception as e:
+                print(f"[ERROR] Cartoon detection failed: {e}")
+                import traceback
+                traceback.print_exc()
+
+    # =========================================================================
+    # COMMON: Colla Pipeline (runs for both image mode and video mode)
+    # =========================================================================
+    
     # 8) Colla pipeline
     print("\n" + "="*80)
     print("STEP 8: COLLA LAYOUT DECOMPOSER PIPELINE")
