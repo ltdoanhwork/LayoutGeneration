@@ -39,7 +39,9 @@ W_TEMPORAL=0.5
 
 # Standard Weights
 W_DIV=0.5
-W_REP=0.5
+W_REP=0.0       # Replaced by W_REC
+W_REC=1.0       # Explicit Reconstruction reward (for RecErr)
+W_FD=0.5        # Frechet distance reward (for Frechet)
 
 # V3 Compatible Parameters
 PERCENTILE_THRESHOLD=0.75
@@ -115,6 +117,8 @@ python -m src.pipeline.train_rl_dsn_v4 \
   \
   --w_div $W_DIV \
   --w_rep $W_REP \
+  --w_rec $W_REC \
+  --w_fd $W_FD \
   --w_probsep 0.1 \
   \
   --lr 1e-4 \
