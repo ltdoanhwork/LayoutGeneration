@@ -26,8 +26,13 @@ def load_validation_results(val_output_dir: str):
         summary_path = epoch_dir / "summary_results.json"
         
         if summary_path.exists():
-            with open(summary_path, 'r') as f:
-                results[epoch_num] = json.load(f)
+            try:
+                with open(summary_path, 'r') as f:
+                    results[epoch_num] = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"⚠️  Skipping {summary_path}: Invalid or empty JSON file ({e})")
+            except Exception as e:
+                print(f"⚠️  Skipping {summary_path}: {e}")
     
     return results
 
@@ -485,4 +490,11 @@ python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_track_d_anime_reward_v2/val_runs\
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_track_d_anime_reward_v2/val_runs/plots 
 
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_rl_multi_video/val_runs\
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_rl_multi_video/val_runs/plots
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_premium_v1/val_runs\
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_premium_v1/val_runs/plots 
 """ 
