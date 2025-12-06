@@ -6,6 +6,11 @@ Batch runner for keyframe pipeline + evaluation + visualization.
 - Save everything under outputs/
     outputs/pipeline/<backend>/run_tv2_<backend>_<video>/
     outputs/eval/<backend>/eval_<video>/
+
+Supports:
+- Video input (MP4 files)
+- Image folder input (folder containing images)
+- Image list input (text file with image paths)
 """
 
 import os
@@ -13,7 +18,7 @@ import glob
 import subprocess
 from pathlib import Path
 import argparse
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from glob import glob as gglob
 
 
@@ -31,6 +36,45 @@ def find_mp4_videos(data_folder: str, pattern: str | None = None) -> List[str]:
         files.update(glob.glob(os.path.join(data_folder, pat)))
         files.update(glob.glob(os.path.join(data_folder, '**', pat), recursive=True))
     return sorted(files)
+
+
+def find_images_in_folder(folder: str, extensions: List[str] = None) -> List[str]:
+    """Find all image files in a folder."""
+    if extensions is None:
+        extensions = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.tiff', '.tif']
+    
+    images = []
+    for ext in extensions:
+        images.extend(glob.glob(os.path.join(folder, f'*{ext}')))
+        images.extend(glob.glob(os.path.join(folder, f'*{ext.upper()}')))
+    return sorted(images)
+
+
+def load_image_list_from_file(list_file: str) -> List[str]:
+    """Load image paths from a text file (one path per line)."""
+    if not os.path.isfile(list_file):
+        raise FileNotFoundError(f"Image list file not found: {list_file}")
+    
+    images = []
+    with open(list_file, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):  # Skip empty lines and comments
+                if os.path.isfile(line):
+                    images.append(line)
+                else:
+                    print(f"  [WARN] Image not found, skipping: {line}")
+    return images
+
+
+def find_image_folders(data_folder: str) -> List[str]:
+    """Find all subfolders containing images."""
+    folders = []
+    for root, dirs, files in os.walk(data_folder):
+        images = find_images_in_folder(root)
+        if images:
+            folders.append(root)
+    return sorted(folders)
 
 
 def _run(cmd: List[str], env=None) -> Tuple[bool, str, str]:
@@ -167,6 +211,158 @@ def run_pipeline_for_video(
     return ok, resolved_dir
 
 
+# ---------------------------- Image List Pipeline ----------------------------
+
+def run_dsn_pipeline_for_images(
+    image_list: List[str],
+    out_dir: str,
+    checkpoint: str,
+    device: str = "cuda",
+    embedder: str = "clip_vitb32",
+    budget_ratio: float = 0.06,
+    Bmin: int = 3,
+    Bmax: int = 8,
+    input_shape_layout: str = None,
+    scaling_factor: int = 1,
+    use_prob_priority: bool = True,
+    resize_w: int = 320,
+    resize_h: int = 180,
+    name: str = "image_batch",
+) -> Tuple[bool, str]:
+    """
+    Run DSN pipeline for a list of images (instead of video).
+    Uses layout_decomposer_dsn_pipeline.py with --image_list option.
+    
+    Args:
+        image_list: List of image file paths
+        out_dir: Output directory
+        checkpoint: Path to DSN checkpoint
+        device: cuda or cpu
+        embedder: Embedding model (clip_vitb32, resnet50, etc.)
+        budget_ratio: Budget ratio for keyframe selection
+        Bmin, Bmax: Min/max keyframes per scene
+        input_shape_layout: Path to shape layout image for Colla
+        scaling_factor: Scaling factor for collage
+        use_prob_priority: Whether to use prob priority for collage
+        resize_w, resize_h: Resize dimensions for processing
+        name: Name for output folder
+    
+    Returns:
+        (success, output_dir)
+    """
+    import tempfile
+    import shutil
+    from datetime import datetime
+    
+    if not image_list:
+        print("❌ No images provided")
+        return False, ""
+    
+    # Create temp file with image list
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir_full = os.path.join(out_dir, f"{name}_{timestamp}")
+    os.makedirs(out_dir_full, exist_ok=True)
+    
+    # Write image list to file
+    image_list_file = os.path.join(out_dir_full, "image_list.txt")
+    with open(image_list_file, 'w') as f:
+        for img_path in image_list:
+            f.write(f"{img_path}\n")
+    
+    print(f"\n{'='*70}")
+    print(f"Processing {len(image_list)} images")
+    print(f"Output: {out_dir_full}")
+    print(f"{'='*70}")
+    
+    # Build command
+    cmd = [
+        "python", "layout_decomposer_dsn_pipeline.py",
+        "--image_list", image_list_file,
+        "--out_dir", out_dir_full,
+        "--checkpoint", checkpoint,
+        "--device", device,
+        "--embedder", embedder,
+        "--budget_ratio", str(budget_ratio),
+        "--Bmin", str(Bmin),
+        "--Bmax", str(Bmax),
+        "--resize_w", str(resize_w),
+        "--resize_h", str(resize_h),
+    ]
+    
+    if input_shape_layout:
+        cmd.extend(["--input_shape_layout", input_shape_layout])
+    
+    cmd.extend(["--scaling_factor", str(scaling_factor)])
+    
+    if use_prob_priority:
+        cmd.append("--use_prob_priority")
+    else:
+        cmd.append("--no_prob_priority")
+    
+    ok, out, err = _run(cmd)
+    
+    if ok:
+        print(f"✅ IMAGE PIPELINE OK: {name}")
+        print(f"Output: {out_dir_full}")
+        if out.strip():
+            # Print last 20 lines
+            lines = out.strip().split('\n')
+            if len(lines) > 20:
+                print("... (truncated)")
+            print('\n'.join(lines[-20:]))
+    else:
+        print(f"❌ IMAGE PIPELINE FAIL: {name}")
+        if err.strip():
+            print(f"   Error: {err[:500]}...")
+    
+    return ok, out_dir_full
+
+
+def run_pipeline_for_image_folder(
+    image_folder: str,
+    out_base: str,
+    checkpoint: str,
+    device: str = "cuda",
+    embedder: str = "clip_vitb32",
+    budget_ratio: float = 0.06,
+    Bmin: int = 3,
+    Bmax: int = 8,
+    input_shape_layout: str = None,
+    scaling_factor: int = 1,
+    use_prob_priority: bool = True,
+    resize_w: int = 320,
+    resize_h: int = 180,
+) -> Tuple[bool, str]:
+    """
+    Run DSN pipeline for all images in a folder.
+    """
+    folder_name = Path(image_folder).name
+    images = find_images_in_folder(image_folder)
+    
+    if not images:
+        print(f"❌ No images found in {image_folder}")
+        return False, ""
+    
+    print(f"📁 Found {len(images)} images in {image_folder}")
+    
+    return run_dsn_pipeline_for_images(
+        image_list=images,
+        out_dir=out_base,
+        checkpoint=checkpoint,
+        device=device,
+        embedder=embedder,
+        budget_ratio=budget_ratio,
+        Bmin=Bmin,
+        Bmax=Bmax,
+        input_shape_layout=input_shape_layout,
+        scaling_factor=scaling_factor,
+        use_prob_priority=use_prob_priority,
+        resize_w=resize_w,
+        resize_h=resize_h,
+        name=folder_name,
+    )
+
+
 # ---------------------------- Eval + Viz step ----------------------------
 
 def run_eval_and_visualize_for_video(
@@ -249,11 +445,22 @@ def run_eval_and_visualize_for_video(
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Batch process videos -> pipeline -> eval -> visualize (all under outputs/)."
+        description="Batch process videos/images -> pipeline -> eval -> visualize (all under outputs/)."
     )
 
+    # =========================
+    # Input mode selection
+    # =========================
+    p.add_argument("--mode", choices=["video", "images", "image_folder", "image_list"], 
+                   default="video",
+                   help="Input mode: 'video' (default), 'images' (folder of images), "
+                        "'image_folder' (process each subfolder), 'image_list' (text file with paths)")
+    
     # Data & toggles
-    p.add_argument("--data_folder", default="samples", help="Folder containing input videos")
+    p.add_argument("--data_folder", default="samples", 
+                   help="Folder containing input videos or images")
+    p.add_argument("--image_list_file", default=None,
+                   help="Path to text file containing image paths (one per line)")
     p.add_argument("--videos_glob", default=None,
                    help="Optional glob (relative to data_folder) to filter videos, e.g. 'classA/**/*.mp4'")
     p.add_argument("--run_pipeline", action="store_true", help="Run pipeline step")
@@ -266,7 +473,9 @@ def parse_args():
     p.add_argument("--eval_out_dir", default=None,
                    help="Custom eval output directory (overrides --output_base structure)")
 
-    # Pipeline options
+    # =========================
+    # Video Pipeline options (original)
+    # =========================
     p.add_argument("--backend", default="transnetv2", help="Scene detector backend")
     p.add_argument("--model_dir", default="src/models/TransNetV2", help="Path to TransNetV2 model")
     p.add_argument("--prob_threshold", type=float, default=0.5)
@@ -280,6 +489,28 @@ def parse_args():
     p.add_argument("--nms_radius", type=int, default=4)
     p.add_argument("--resize_w", type=int, default=320)
     p.add_argument("--resize_h", type=int, default=320)
+
+    # =========================
+    # Image/DSN Pipeline options (new)
+    # =========================
+    p.add_argument("--checkpoint", default="runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt",
+                   help="Path to DSN model checkpoint")
+    p.add_argument("--device", default="cuda", help="Device for inference (cuda/cpu)")
+    p.add_argument("--embedder", default="clip_vitb32", 
+                   choices=["clip_vitb32", "resnet50", "classic"],
+                   help="Embedding model for image features")
+    p.add_argument("--budget_ratio", type=float, default=0.06,
+                   help="Budget ratio for keyframe selection")
+    p.add_argument("--Bmin", type=int, default=3, help="Minimum keyframes per scene")
+    p.add_argument("--Bmax", type=int, default=8, help="Maximum keyframes per scene")
+    p.add_argument("--input_shape_layout", default=None,
+                   help="Path to shape layout image for Colla collage")
+    p.add_argument("--scaling_factor", type=int, default=1,
+                   help="Scaling factor for collage output")
+    p.add_argument("--use_prob_priority", action="store_true", default=True,
+                   help="Use DSN probability for priority placement in collage")
+    p.add_argument("--no_prob_priority", action="store_false", dest="use_prob_priority",
+                   help="Disable prob-based priority")
 
     # Eval + Viz options
     p.add_argument("--eval_script", default="scripts/eval_keyframes.py")
@@ -311,6 +542,144 @@ def main():
     else:
         output_base_for_eval = args.output_base
 
+    # =========================
+    # IMAGE MODE PROCESSING
+    # =========================
+    if args.mode in ["images", "image_folder", "image_list"]:
+        print(f"\n{'='*70}")
+        print(f"🖼️  IMAGE MODE: {args.mode}")
+        print(f"{'='*70}")
+        
+        os.makedirs(output_base_for_pipeline, exist_ok=True)
+        
+        success_count = 0
+        failed = []
+        
+        if args.mode == "image_list":
+            # Process images from a text file
+            if not args.image_list_file:
+                print("❌ --image_list_file required for mode 'image_list'")
+                return
+            
+            try:
+                images = load_image_list_from_file(args.image_list_file)
+                print(f"📄 Loaded {len(images)} images from {args.image_list_file}")
+                
+                if args.run_pipeline:
+                    ok, out_dir = run_dsn_pipeline_for_images(
+                        image_list=images,
+                        out_dir=output_base_for_pipeline,
+                        checkpoint=args.checkpoint,
+                        device=args.device,
+                        embedder=args.embedder,
+                        budget_ratio=args.budget_ratio,
+                        Bmin=args.Bmin,
+                        Bmax=args.Bmax,
+                        input_shape_layout=args.input_shape_layout,
+                        scaling_factor=args.scaling_factor,
+                        use_prob_priority=args.use_prob_priority,
+                        resize_w=args.resize_w,
+                        resize_h=args.resize_h,
+                        name=Path(args.image_list_file).stem,
+                    )
+                    if ok:
+                        success_count += 1
+                    else:
+                        failed.append((args.image_list_file, "Pipeline failed"))
+            except Exception as e:
+                print(f"❌ Error: {e}")
+                failed.append((args.image_list_file, str(e)[:50]))
+        
+        elif args.mode == "images":
+            # Process all images in data_folder as one batch
+            images = find_images_in_folder(args.data_folder)
+            if not images:
+                print(f"❌ No images found in '{args.data_folder}'")
+                return
+            
+            print(f"🖼️  Found {len(images)} images in {args.data_folder}")
+            for i, img in enumerate(images[:10], 1):
+                print(f"  {i}. {Path(img).name}")
+            if len(images) > 10:
+                print(f"  ... and {len(images) - 10} more")
+            
+            if args.run_pipeline:
+                ok, out_dir = run_dsn_pipeline_for_images(
+                    image_list=images,
+                    out_dir=output_base_for_pipeline,
+                    checkpoint=args.checkpoint,
+                    device=args.device,
+                    embedder=args.embedder,
+                    budget_ratio=args.budget_ratio,
+                    Bmin=args.Bmin,
+                    Bmax=args.Bmax,
+                    input_shape_layout=args.input_shape_layout,
+                    scaling_factor=args.scaling_factor,
+                    use_prob_priority=args.use_prob_priority,
+                    resize_w=args.resize_w,
+                    resize_h=args.resize_h,
+                    name=Path(args.data_folder).name,
+                )
+                if ok:
+                    success_count += 1
+                else:
+                    failed.append((args.data_folder, "Pipeline failed"))
+        
+        elif args.mode == "image_folder":
+            # Process each subfolder as a separate batch
+            folders = find_image_folders(args.data_folder)
+            if not folders:
+                print(f"❌ No image folders found in '{args.data_folder}'")
+                return
+            
+            print(f"📁 Found {len(folders)} folder(s) with images:")
+            for i, f in enumerate(folders, 1):
+                n_imgs = len(find_images_in_folder(f))
+                print(f"  {i}. {f} ({n_imgs} images)")
+            
+            if args.run_pipeline:
+                for idx, folder in enumerate(folders, 1):
+                    print(f"\n--- [{idx}/{len(folders)}] {folder} ---")
+                    try:
+                        ok, out_dir = run_pipeline_for_image_folder(
+                            image_folder=folder,
+                            out_base=output_base_for_pipeline,
+                            checkpoint=args.checkpoint,
+                            device=args.device,
+                            embedder=args.embedder,
+                            budget_ratio=args.budget_ratio,
+                            Bmin=args.Bmin,
+                            Bmax=args.Bmax,
+                            input_shape_layout=args.input_shape_layout,
+                            scaling_factor=args.scaling_factor,
+                            use_prob_priority=args.use_prob_priority,
+                            resize_w=args.resize_w,
+                            resize_h=args.resize_h,
+                        )
+                        if ok:
+                            success_count += 1
+                        else:
+                            failed.append((folder, "Pipeline failed"))
+                    except Exception as e:
+                        print(f"❌ Error: {e}")
+                        failed.append((folder, str(e)[:50]))
+        
+        # Summary
+        print("\n" + "=" * 70)
+        print("🎯 IMAGE BATCH COMPLETE")
+        print("=" * 70)
+        total = 1 if args.mode in ["images", "image_list"] else len(folders)
+        print(f"✅ Processed: {success_count}/{total}")
+        if failed:
+            print(f"❌ Failed ({len(failed)}):")
+            for item, reason in failed:
+                print(f"  - {item}: {reason}")
+        print(f"\nOutput → {output_base_for_pipeline}")
+        return
+
+    # =========================
+    # VIDEO MODE PROCESSING (original)
+    # =========================
     videos = find_mp4_videos(args.data_folder, args.videos_glob)
     if not videos:
         print(f"❌ No MP4 videos found in '{args.data_folder}'")
@@ -404,57 +773,91 @@ if __name__ == "__main__":
     main()
 
 """
+=============================================================================
+USAGE EXAMPLES
+=============================================================================
+
+# 1. VIDEO MODE (original) - Process videos in a folder
 python batch_processing.py \
+  --mode video \
   --run_pipeline \
-  --run_evalviz \
-  --data_folder samples \
+  --data_folder /path/to/videos \
   --output_base outputs \
-  --eval_out_base outputs_eval \
-  --num_workers 4
+  --distance_backend dists
 
-
-  python batch_processing.py \
-  --run_pipeline \
-  --run_evalviz \
-  --data_folder samples \
-  --distance_backend lpips \
-  --num_workers 4
-"""
-# Run trên tập test
-"""
-LPIPS:
+# 2. IMAGE MODE - Process all images in a folder as one batch
 python batch_processing.py \
+  --mode images \
+  --run_pipeline \
+  --data_folder /path/to/images \
+  --output_base outputs \
+  --checkpoint runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt \
+  --input_shape_layout repos/Colla/input_data/layout/baby.png
+
+# 3. IMAGE FOLDER MODE - Process each subfolder as a separate batch
+python batch_processing.py \
+  --mode image_folder \
+  --run_pipeline \
+  --data_folder /path/to/parent_folder \
+  --output_base outputs \
+  --checkpoint runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt
+
+# 4. IMAGE LIST MODE - Process images listed in a text file
+python batch_processing.py \
+  --mode image_list \
+  --run_pipeline \
+  --image_list_file /path/to/image_list.txt \
+  --output_base outputs \
+  --checkpoint runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt \
+  --use_prob_priority
+
+# Example image_list.txt format:
+# /path/to/image1.jpg
+# /path/to/image2.png
+# # This is a comment (lines starting with # are ignored)
+# /path/to/image3.jpg
+
+=============================================================================
+VIDEO PIPELINE EXAMPLES (with evaluation)
+=============================================================================
+
+# LPIPS backend:
+python batch_processing.py \
+  --mode video \
   --run_pipeline \
   --run_evalviz \
   --data_folder /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test \
-  --output_base /home/serverai/ltdoanh/LayoutGeneration/data/outputs/Dang/batch_eval_test_lpips \
+  --output_base outputs/batch_eval_lpips \
   --distance_backend lpips \
   --backend transnetv2 \
   --prob_threshold 0.5 \
-  --sample_stride 5 \
-  --eval_backbone resnet50 \
-  --eval_sample_stride 10 \
-  --eval_max_frames 100 \
-  --eval_tau 0.5 \
-  --nms_radius 2 \
-  --resize_w 320 \
-  --resize_h 270
+  --sample_stride 5
 
-  DISTS
+# DISTS backend:
 python batch_processing.py \
+  --mode video \
   --run_pipeline \
   --run_evalviz \
   --data_folder /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test \
-  --output_base /home/serverai/ltdoanh/LayoutGeneration/data/outputs/Dang/batch_eval_test_dists \
+  --output_base outputs/batch_eval_dists \
   --distance_backend dists \
   --backend transnetv2 \
-  --prob_threshold 0.5 \
-  --sample_stride 5 \
-  --eval_backbone resnet50 \
-  --eval_sample_stride 10 \
-  --eval_max_frames 100 \
-  --eval_tau 0.5 \
-  --nms_radius 2 \
-  --resize_w 320 \
-  --resize_h 180
-  """
+  --prob_threshold 0.5
+
+=============================================================================
+IMAGE DSN PIPELINE EXAMPLES (with Colla collage)
+=============================================================================
+
+# Process keyframes folder with DSN scoring + Colla collage:
+python batch_processing.py \
+  --mode images \
+  --run_pipeline \
+  --data_folder outputs/test_prob_priority_70025_20251203_064529/keyframes \
+  --output_base outputs/image_batch_test \
+  --checkpoint runs/dsn_advanced_v1/dsn_checkpoint_ep8.pt \
+  --embedder clip_vitb32 \
+  --budget_ratio 0.06 \
+  --Bmin 3 --Bmax 8 \
+  --input_shape_layout repos/Colla/input_data/layout/baby.png \
+  --use_prob_priority
+"""
