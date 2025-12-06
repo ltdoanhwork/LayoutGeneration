@@ -26,8 +26,13 @@ def load_validation_results(val_output_dir: str):
         summary_path = epoch_dir / "summary_results.json"
         
         if summary_path.exists():
-            with open(summary_path, 'r') as f:
-                results[epoch_num] = json.load(f)
+            try:
+                with open(summary_path, 'r') as f:
+                    results[epoch_num] = json.load(f)
+            except json.JSONDecodeError as e:
+                print(f"⚠️  Skipping {summary_path}: Invalid or empty JSON file ({e})")
+            except Exception as e:
+                print(f"⚠️  Skipping {summary_path}: {e}")
     
     return results
 
