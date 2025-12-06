@@ -497,4 +497,8 @@ python -m eval.visualize_validation \
 python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_premium_v1/val_runs\
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_premium_v1/val_runs/plots 
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v3/val_runs\
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v3/val_runs/plots    
 """ 
