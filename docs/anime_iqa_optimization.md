@@ -1,5 +1,8 @@
 # Premium Anime-CLIP-IQA Optimization
 
+> [!IMPORTANT]
+> **Version 3 Now Available!** This document describes V1 Premium. For the latest enhanced version with torchmetrics CLIP-IQA, 3-stage curriculum, reward normalization, and better performance, see [`anime_iqa_optimization_v3.md`](./anime_iqa_optimization_v3.md).
+
 ## Overview
 
 This module implements an academic-grade optimization strategy to maximize Anime-CLIP-IQA scores (Look, Sakuga, Story) in the DSN video summarization model. It leverages multi-video training with a sophisticated reward system designed to force the model to select only the highest-quality frames.
