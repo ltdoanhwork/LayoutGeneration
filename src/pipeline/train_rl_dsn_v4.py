@@ -33,7 +33,7 @@ from tqdm import tqdm
 # Import core components
 from src.datasets import build_epoch_index, load_scene_dir
 from src.models.dsn_advanced import DSNAdvanced, DSNConfig
-from src.rl.rewards import reward_combo
+from src.rl.rewards import reward_combo_v4 as reward_combo
 from src.rl.premium_rewards_v3 import PremiumAnimeRewardV3
 from src.rl.ppo_core import PPOCore, PPOConfig, compute_log_prob_bernoulli
 from src.rl.gae import GAEComputer
