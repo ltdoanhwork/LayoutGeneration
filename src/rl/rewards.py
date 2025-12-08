@@ -204,7 +204,7 @@ def reward_combo(
     lpips_device: str = "cuda",
     reward_stats: Optional[Dict[str, float]] = None,
     return_components: bool = False,
-) -> float:
+) -> float | Tuple[float, Dict[str, float]]:
     if len(sel_idx) == 0:
         return 0.0
     feats_sel = feats_all[sel_idx]

@@ -397,6 +397,7 @@ def main():
         
         # Accumulators
         ep_rewards: List[float] = []
+        ep_components: Dict[str, List[float]] = {}  # Store all components
         look_scores_sel = []
         sakuga_scores_sel = []
         
@@ -454,8 +455,7 @@ def main():
             sel_idx = (acts == 1).nonzero(as_tuple=False).squeeze(-1).cpu().numpy().tolist()
 
             # === Compute Rewards === #
-            # Standard components
-            R_base = reward_combo(
+            R_base, components_base = reward_combo(
                 feats_all=feats,
                 sel_idx=sel_idx,
                 frames_all=frames,
@@ -464,7 +464,8 @@ def main():
                 w_rec=args.w_rec,
                 w_fd=args.w_fd,
                 w_probsep=args.w_probsep,
-                probs=probs.detach().cpu().numpy().squeeze(0)
+                probs=probs.detach().cpu().numpy().squeeze(0),
+                return_components=True
             )
             
             # Premium Anime Components
@@ -500,7 +501,31 @@ def main():
             )
             
             # Track metrics
+            # Track metrics
             ep_rewards.append(R)
+            
+            # Aggregate all components for logging
+            # components_base keys: div, rep, rec, fd, ms, motion, anime_look, anime_sakuga, anime_story, probsep
+            # Add total anime reward breakdown if desired
+            for k, v in components_base.items():
+                if k not in ep_components: ep_components[k] = []
+                # Scale by weight for visualization of effective contribution
+                weight = 0.0
+                if k == 'div': weight = args.w_div
+                elif k == 'rep': weight = args.w_rep
+                elif k == 'rec': weight = args.w_rec
+                elif k == 'fd': weight = args.w_fd
+                elif k == 'probsep': weight = args.w_probsep
+                elif k.startswith('anime_'): weight = 1.0 # already weighted in R_anime or not part of base
+                else: weight = 1.0
+                ep_components[k].append(v * weight) # Weighted component
+            
+            # Also track unweighted anime components from premium_reward
+            for k, v in anime_rewards.items():
+                if k != 'total':
+                    k_full = f"raw_anime_{k}"
+                    if k_full not in ep_components: ep_components[k_full] = []
+                    ep_components[k_full].append(v)
             
             if sample.anime_attrs is not None and len(sel_idx) > 0:
                 look = (sample.anime_attrs[:, 0] + sample.anime_attrs[:, 1] + sample.anime_attrs[:, 2]) / 3.0
@@ -539,6 +564,11 @@ def main():
         writer.add_scalar("train/std_reward", stdR, epoch)
         writer.add_scalar("aesthetic/mean_look_selected", mean_look, epoch)
         writer.add_scalar("aesthetic/mean_sakuga_selected", mean_sakuga, epoch)
+        
+        # Log all individual reward components
+        for comp_name, comp_vals in ep_components.items():
+             if comp_vals:
+                 writer.add_scalar(f"components/{comp_name}", np.mean(comp_vals), epoch)
         
         # V4 PPO metrics
         writer.add_scalar("ppo/actor_loss", ppo_metrics["actor_loss"], epoch)
@@ -623,6 +653,16 @@ def main():
                                 "version": "v4"
                             }, best_ckpt)
                             tqdm.write(f"  ✅ New best RecErr: {best_metric:.4f}")
+                        
+                        # Run visualization
+                        viz_out = val_out / "plots"
+                        viz_cmd = [
+                            "python", "-m", "eval.visualize_validation",
+                            "--val_output_dir", str(val_out.parent), # Point to parent of epX (val_runs)
+                            "--output_dir", str(viz_out),
+                            "--epoch", str(epoch)
+                        ]
+                        subprocess.run(viz_cmd, capture_output=True) # Fail silently if viz fails, it's optional
 
     # End training
     epoch_pbar.close()

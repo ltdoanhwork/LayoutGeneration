@@ -469,8 +469,8 @@ def main():
         print(f"[run_dsn_pipeline] Loading checkpoint from {args.checkpoint}")
         ckpt = torch.load(args.checkpoint, map_location=dev)
         
-        # Check if it's an advanced model checkpoint
-        if "model_type" in ckpt and ckpt["model_type"] == "advanced":
+        # Check if it's an advanced model checkpoint (v3 or v4)
+        if "model_type" in ckpt and ("advanced" in ckpt["model_type"]):
             model_type = "advanced"
             print("[run_dsn_pipeline] Detected advanced DSN model")
             config = ckpt["config"]
