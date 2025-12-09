@@ -277,6 +277,7 @@ def main():
     ap.add_argument("--eval_sample_stride", type=int, default=5)
     ap.add_argument("--eval_resize_w", type=int, default=320)
     ap.add_argument("--eval_resize_h", type=int, default=180)
+    ap.add_argument("--eval_min_scene_len", type=int, default=48, help="Min scene len for eval scene detection")
     ap.add_argument("--eval_device", type=str, default=None)
     ap.add_argument("--eval_with_baselines", action="store_true")
     ap.add_argument("--eval_max_videos", type=int, default=None)
@@ -617,6 +618,7 @@ def main():
                 "--eval_device", eval_device,
                 "--use_anime_attrs", str(args.use_anime_attrs),
                 "--anime_attrs_dim", str(args.anime_attrs_dim),
+                "--min_scene_len", str(args.eval_min_scene_len),
             ]
             
             if args.eval_with_baselines:

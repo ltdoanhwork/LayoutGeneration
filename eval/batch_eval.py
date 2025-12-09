@@ -39,6 +39,7 @@ class BatchEvaluationPipeline:
                  scene_device: str | None = None,
                  use_anime_attrs: int = 0,
                  anime_attrs_dim: int = 6,
+                 min_scene_len: int = 0,
                  debug: bool = False):
         self.videos_dir = videos_dir
         self.output_base_dir = output_base_dir
@@ -64,6 +65,7 @@ class BatchEvaluationPipeline:
         self.scene_device = scene_device
         self.use_anime_attrs = use_anime_attrs
         self.anime_attrs_dim = anime_attrs_dim
+        self.min_scene_len = min_scene_len
         self.pipeline_out_dir = os.path.join(output_base_dir, "pipeline_results")
         self.eval_out_dir = os.path.join(output_base_dir, "eval_results")
         os.makedirs(self.pipeline_out_dir, exist_ok=True)
@@ -94,6 +96,7 @@ class BatchEvaluationPipeline:
             "--resize_h", str(self.resize_h),
             "--embedder", self.embedder,
             "--backend", self.backend,
+            "--min_scene_len", str(self.min_scene_len),
             ]
             if self.checkpoint:
                 cmd += ["--checkpoint", self.checkpoint]
@@ -320,6 +323,7 @@ def main():
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
+    ps.add_argument("--min_scene_len", type=int, default=0, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
 
@@ -332,7 +336,8 @@ def main():
     embedder=args.embedder, device=args.eval_device, debug=args.debug,
     backend=args.backend, threshold=args.threshold, model_dir=args.model_dir,
     weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device,
-    use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim
+    use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim,
+    min_scene_len=args.min_scene_len
     )
 
 
