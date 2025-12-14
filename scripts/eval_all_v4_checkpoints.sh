@@ -2,7 +2,7 @@
 # Evaluate all V4 checkpoints
 
 CHECKPOINT_DIR="runs/dsn_anime_v4_scaled/checkpoints"
-VIDEOS_DIR="data/samples/Sakuga"  # Raw videos, not processed dataset!
+VIDEOS_DIR="data/samples/Sakuga_test"  # Test set for evaluation
 OUTPUT_DIR="runs/dsn_anime_v4_scaled/checkpoint_eval"
 
 # Model config (must match training)

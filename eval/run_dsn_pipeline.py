@@ -469,8 +469,29 @@ def main():
         print(f"[run_dsn_pipeline] Loading checkpoint from {args.checkpoint}")
         ckpt = torch.load(args.checkpoint, map_location=dev)
         
+        # Check for V5 multi-task model
+        if "model_type" in ckpt and "multitask" in ckpt["model_type"]:
+            model_type = "multitask_v5"
+            print("[run_dsn_pipeline] Detected V5 Multi-Task DSN model")
+            config = ckpt["config"]
+            
+            # Auto-detect if anime_attrs were used in training
+            if config.feat_dim > emb_dim:
+                use_anime_attrs_auto = True
+                print(f"[run_dsn_pipeline] Auto-detected Anime-CLIP-IQA (feat_dim={config.feat_dim} > emb_dim={emb_dim})")
+                args.use_anime_attrs = 1
+                args.anime_attrs_dim = config.feat_dim - emb_dim
+            
+            from src.models.dsn_multitask import DSNMultiTask
+            model = DSNMultiTask(config).to(dev).eval()
+            model.load_state_dict(ckpt["model"])
+            print(f"  Config: {config}")
+            print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
+            if "merge_weight" in ckpt:
+                print(f"  Merge weight (α): {ckpt['merge_weight']:.3f}")
+        
         # Check if it's an advanced model checkpoint (v3 or v4)
-        if "model_type" in ckpt and ("advanced" in ckpt["model_type"]):
+        elif "model_type" in ckpt and ("advanced" in ckpt["model_type"]):
             model_type = "advanced"
             print("[run_dsn_pipeline] Detected advanced DSN model")
             config = ckpt["config"]
@@ -541,7 +562,8 @@ def main():
             if model_type == "baseline":
                 h = enc(x)                  # (1, T, H)
                 probs = pol(h).squeeze(0)   # (T,)
-            else:  # advanced
+            elif model_type in ["advanced", "multitask_v5"]:
+                # Both advanced and multitask_v5 share same interface
                 scene_id = f"scene_{sid}"
                 probs = model(x, scene_id=scene_id).squeeze(0)  # (T,)
             probs = torch.clamp(probs, 1e-6, 1 - 1e-6)

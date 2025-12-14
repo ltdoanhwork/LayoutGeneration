@@ -505,4 +505,13 @@ python -m eval.visualize_validation \
 python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4/val_runs\
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4/val_runs/plots     
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4_scaled/checkpoint_eval \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4_scaled/plots  
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4_scaled/checkpoint_eval \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_anime_v4_scaled/plots 
+    
 """ 
