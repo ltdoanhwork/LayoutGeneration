@@ -491,6 +491,12 @@ def main():
                 "--backend", args.eval_backend,
                 "--use_anime_attrs", str(args.use_anime_attrs),
                 "--min_scene_len", "48",
+                "--model_dir", "./src/models/TransNetV2",
+                "--prob_threshold", "0.5",
+                "--scene_device", eval_device,
+                "--sample_stride", "4",  # Match fps=6 on 24fps video
+                "--resize_w", "0",
+                "--resize_h", "0",
             ]
             
             if args.eval_with_baselines:

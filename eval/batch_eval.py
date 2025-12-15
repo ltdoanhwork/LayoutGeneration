@@ -313,17 +313,17 @@ def main():
                     help="Limit the number of videos to process")
     ps.add_argument("--num_workers", type=int, default=1)
     ps.add_argument("--debug", action="store_true")
-    ps.add_argument("--backend", type=str, default="pyscenedetect",
+    ps.add_argument("--backend", type=str, default="transnetv2",
                 help="Scene detector backend: pyscenedetect | transnetv2")
-    ps.add_argument("--threshold", type=float, default=27.0)
-    ps.add_argument("--model_dir", type=str, default=None)
+    ps.add_argument("--threshold", type=float, default=27.0, help="[pyscenedetect] threshold")
+    ps.add_argument("--model_dir", type=str, default="./src/models/TransNetV2", help="[transnetv2] model directory")
     ps.add_argument("--weights_path", type=str, default=None)
-    ps.add_argument("--prob_threshold", type=float, default=None)
+    ps.add_argument("--prob_threshold", type=float, default=0.5, help="[transnetv2] probability threshold")
     ps.add_argument("--scene_device", type=str, default=None)
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
-    ps.add_argument("--min_scene_len", type=int, default=0, help="Min scene length to match prepare_rl_dataset")
+    ps.add_argument("--min_scene_len", type=int, default=48, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
 

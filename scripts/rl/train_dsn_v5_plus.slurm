@@ -39,11 +39,11 @@ source /srv/conda/envs/serverai/sam/bin/activate
 mkdir -p logs
 
 # Paths
-DATASET_ROOT="data/sakuga_dataset_100_samples"
-SAVE_DIR="runs/dsn_v5_plus/checkpoints"
-LOG_DIR="runs/dsn_v5_plus/logs"
+DATASET_ROOT="data/sakuga_dataset_100_samples_transnetv2"
+SAVE_DIR="runs/dsn_v5_plus_transnetv2/checkpoints"
+LOG_DIR="runs/dsn_v5_plus_transnetv2/logs"
 VAL_VIDEOS="data/samples/Sakuga_test"
-VAL_OUTPUT="runs/dsn_v5_plus/val_runs"
+VAL_OUTPUT="runs/dsn_v5_plus_transnetv2/val_runs"
 
 # Training
 EPOCHS=80

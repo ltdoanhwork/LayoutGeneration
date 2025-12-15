@@ -385,7 +385,7 @@ def main():
     parser.add_argument(
         "--backend",
         type=str,
-        default="pyscenedetect",
+        default="transnetv2",
         choices=available_detectors(),
     )
     parser.add_argument("--threshold", type=float, default=None, help="[pyscenedetect] ContentDetector threshold.")
