@@ -393,12 +393,140 @@ def plot_extra_metrics_detailed(extra_metrics, output_dir):
             plt.close()
 
 
+def plot_anime_quality_over_epochs(results, output_dir):
+    """Plot V6 anime quality improvement metrics over epochs"""
+    epochs = sorted(results.keys())
+    
+    # Per-attribute anime metrics
+    attr_metrics = [
+        'Anime_Sharpness_Mean', 'Anime_Colorfulness_Mean', 'Anime_Brightness_Mean',
+        'Anime_Sakuga_Mean', 'Anime_Cinematic_Mean', 'Anime_Expression_Mean'
+    ]
+    
+    # Check if any anime metrics exist
+    has_anime_metrics = False
+    for ep in epochs:
+        aq = results[ep].get('anime_quality_metrics', {})
+        if any(aq.get(m) is not None for m in attr_metrics):
+            has_anime_metrics = True
+            break
+    
+    if not has_anime_metrics:
+        print("⚠️  No anime quality metrics found")
+        return
+    
+    # Create per-attribute plot
+    n_metrics = len(attr_metrics)
+    n_cols = 3
+    n_rows = (n_metrics + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(6*n_cols, 5*n_rows))
+    axes = axes.flatten()
+    
+    for idx, metric in enumerate(attr_metrics):
+        values = []
+        stds = []
+        std_metric = metric.replace('_Mean', '_Std')
+        
+        for ep in epochs:
+            aq = results[ep].get('anime_quality_metrics', {})
+            val = aq.get(metric)
+            std = aq.get(std_metric)
+            
+            if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                values.append(val)
+                stds.append(std if std is not None else 0.0)
+            else:
+                values.append(None)
+                stds.append(None)
+        
+        # Filter valid
+        valid_epochs = [e for e, v in zip(epochs, values) if v is not None]
+        valid_values = [v for v in values if v is not None]
+        valid_stds = [s for s, v in zip(stds, values) if v is not None]
+        
+        if valid_values:
+            ax = axes[idx]
+            valid_values = np.array(valid_values)
+            valid_stds = np.array(valid_stds)
+            
+            ax.errorbar(valid_epochs, valid_values, yerr=valid_stds, 
+                       marker='o', linewidth=2, markersize=8, capsize=5,
+                       color='#2980b9', label='Mean ± Std')
+            ax.fill_between(valid_epochs, valid_values - valid_stds, 
+                           valid_values + valid_stds, alpha=0.2)
+            
+            ax.set_xlabel('Epoch', fontsize=12)
+            ax.set_ylabel(metric.replace('_Mean', ''), fontsize=12)
+            ax.set_title(f'{metric.replace("_Mean", "")} over Epochs', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            
+            # Mark best epoch (higher is better for quality)
+            best_idx = np.argmax(valid_values)
+            ax.scatter([valid_epochs[best_idx]], [valid_values[best_idx]], 
+                      color='red', s=200, zorder=5, marker='*', 
+                      label=f'Best (max): Epoch {valid_epochs[best_idx]}')
+            ax.legend()
+    
+    # Hide unused subplots
+    for idx in range(n_metrics, len(axes)):
+        axes[idx].set_visible(False)
+    
+    plt.tight_layout()
+    plt.savefig(Path(output_dir) / 'anime_quality_over_epochs.png', dpi=150, bbox_inches='tight')
+    print(f"✅ Saved: {output_dir}/anime_quality_over_epochs.png")
+    plt.close()
+    
+    # Plot Top-10 metrics
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
+    
+    top10_metrics = [
+        ('Top10_Recall_mean', 'Top-10 Recall', '#27ae60', ax1),
+        ('Top10_Precision_mean', 'Top-10 Precision', '#e67e22', ax2),
+        ('Quality_Improvement_mean', 'Quality Improvement', '#8e44ad', ax3),
+    ]
+    
+    for metric, label, color, ax in top10_metrics:
+        values = []
+        for ep in epochs:
+            aq = results[ep].get('anime_quality_metrics', {})
+            val = aq.get(metric)
+            if val is not None and not (isinstance(val, float) and np.isnan(val)):
+                values.append(val)
+            else:
+                values.append(None)
+        
+        valid_epochs = [e for e, v in zip(epochs, values) if v is not None]
+        valid_values = [v for v in values if v is not None]
+        
+        if valid_values:
+            ax.plot(valid_epochs, valid_values, marker='o', linewidth=2.5, 
+                   markersize=10, color=color, label=label)
+            ax.set_xlabel('Epoch', fontsize=12)
+            ax.set_ylabel(label, fontsize=12)
+            ax.set_title(f'{label} over Epochs', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            
+            # Best marker
+            best_idx = np.argmax(valid_values)
+            ax.scatter([valid_epochs[best_idx]], [valid_values[best_idx]], 
+                      color='red', s=200, zorder=5, marker='*', 
+                      label=f'Best: Epoch {valid_epochs[best_idx]}')
+            ax.legend()
+    
+    plt.tight_layout()
+    plt.savefig(Path(output_dir) / 'quality_improvement_over_epochs.png', dpi=150, bbox_inches='tight')
+    print(f"✅ Saved: {output_dir}/quality_improvement_over_epochs.png")
+    plt.close()
+
+
 def main():
 
     parser = argparse.ArgumentParser(description="Visualize validation results")
     parser.add_argument("--val_output_dir", required=True, help="Path to validation output directory")
     parser.add_argument("--output_dir", default=None, help="Where to save plots (default: val_output_dir/plots)")
     parser.add_argument("--epoch", type=int, default=None, help="Specific epoch to visualize (default: latest)")
+    parser.add_argument("--save_images", action="store_true", help="Automatically save all visualizations")
     
     args = parser.parse_args()
     
@@ -442,6 +570,11 @@ def main():
         
         print("\n📊 Plotting detailed extra metrics...")
         plot_extra_metrics_detailed(extra_metrics, output_dir)
+    
+    # V6: Plot anime quality improvement metrics
+    if len(results) > 1:
+        print("\n📊 Plotting V6 anime quality improvement metrics...")
+        plot_anime_quality_over_epochs(results, output_dir)
     
     # Plot method comparison and per-video for specific epoch
     epoch_to_plot = args.epoch if args.epoch else max(results.keys())
@@ -516,4 +649,16 @@ python -m eval.visualize_validation \
 python -m eval.visualize_validation \
     --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_anime_focus/val_runs \
     --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_anime_focus/plots 
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_plus_transnetv2/val_runs \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_plus_transnetv2/plots 
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_large_transnetv2/val_runs \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_large_transnetv2/plots 
+
+python -m eval.visualize_validation \
+    --val_output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v6_quality_aligned/val_runs \
+    --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v6_quality_aligned/plots 
 """ 

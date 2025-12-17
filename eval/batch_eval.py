@@ -255,8 +255,22 @@ class BatchEvaluationPipeline:
         def safe_mean(xs): 
             vals = [x for x in xs if x is not None and not (isinstance(x,float) and np.isnan(x))]
             return float(np.mean(vals)) if vals else None
+        
+        def safe_std(xs):
+            vals = [x for x in xs if x is not None and not (isinstance(x,float) and np.isnan(x))]
+            return float(np.std(vals)) if len(vals) > 1 else None
+        
         if self.results:
             rec = []; fre = []; scov=[]; tcov=[]; lp_gap=[]; lp_div=[]; ms=[]
+            # V6: Per-attribute anime metrics
+            anime_attrs = {
+                "Anime_Sharpness": [], "Anime_Colorfulness": [], "Anime_Brightness": [],
+                "Anime_Sakuga": [], "Anime_Cinematic": [], "Anime_Expression": []
+            }
+            top_k_recalls = []
+            top_k_precisions = []
+            quality_improvements = []
+            
             for vid, r in self.results.items():
                 # Metrics are nested: r["metrics"]["method"] contains DSN results
                 # Extra metrics are at top level of r["metrics"] usually
@@ -272,6 +286,19 @@ class BatchEvaluationPipeline:
                 lp_gap.append(root.get("LPIPS_PerceptualGap", m.get("LPIPS_PerceptualGap")))
                 lp_div.append(root.get("LPIPS_DiversitySel", m.get("LPIPS_DiversitySel")))
                 ms.append(root.get("MS_SWD_Color", m.get("MS_SWD_Color")))
+                
+                # V6: Anime quality metrics
+                anime_attrs["Anime_Sharpness"].append(root.get("Anime_Sharpness_Mean", m.get("Anime_Sharpness_Mean")))
+                anime_attrs["Anime_Colorfulness"].append(root.get("Anime_Colorfulness_Mean", m.get("Anime_Colorfulness_Mean")))
+                anime_attrs["Anime_Brightness"].append(root.get("Anime_Brightness_Mean", m.get("Anime_Brightness_Mean")))
+                anime_attrs["Anime_Sakuga"].append(root.get("Anime_Sakuga_Mean", m.get("Anime_Sakuga_Mean")))
+                anime_attrs["Anime_Cinematic"].append(root.get("Anime_Cinematic_Mean", m.get("Anime_Cinematic_Mean")))
+                anime_attrs["Anime_Expression"].append(root.get("Anime_Expression_Mean", m.get("Anime_Expression_Mean")))
+                
+                # V6: Quality improvement metrics  
+                top_k_recalls.append(root.get("Top10_Recall", m.get("Top10_Recall")))
+                top_k_precisions.append(root.get("Top10_Precision", m.get("Top10_Precision")))
+                quality_improvements.append(root.get("Quality_Improvement", m.get("Quality_Improvement")))
             
             summary["aggregate_metrics"] = {
                 "RecErr_mean": safe_mean(rec),
@@ -282,6 +309,18 @@ class BatchEvaluationPipeline:
                 "LPIPS_DiversitySel_mean": safe_mean(lp_div),
                 "MS_SWD_Color_mean": safe_mean(ms),
             }
+            
+            # V6: Anime quality metrics with mean and std
+            summary["anime_quality_metrics"] = {}
+            for attr_name, values in anime_attrs.items():
+                summary["anime_quality_metrics"][f"{attr_name}_Mean"] = safe_mean(values)
+                summary["anime_quality_metrics"][f"{attr_name}_Std"] = safe_std(values)
+            
+            # V6: Top-k and quality improvement
+            summary["anime_quality_metrics"]["Top10_Recall_mean"] = safe_mean(top_k_recalls)
+            summary["anime_quality_metrics"]["Top10_Precision_mean"] = safe_mean(top_k_precisions)
+            summary["anime_quality_metrics"]["Quality_Improvement_mean"] = safe_mean(quality_improvements)
+            
         outp = os.path.join(self.output_base_dir, "summary_results.json")
         with open(outp, "w", encoding="utf-8") as f: json.dump(summary, f, indent=2, ensure_ascii=False)
         tqdm.write(f"\n📊 Summary saved to: {outp}")
