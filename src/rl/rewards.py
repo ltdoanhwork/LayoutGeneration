@@ -180,7 +180,7 @@ def prob_separation_reward(probs: np.ndarray, sel_idx: List[int]) -> float:
     # We want mean prob of keyframes to be higher than non-keyframes
     return float(sel_probs.mean() - rest_probs.mean())
 
-def reward_combo(
+def reward_combo_v4(
     feats_all: np.ndarray,             # (T,D) normalized
     sel_idx: List[int],                # indices
     frames_all: Optional[List[np.ndarray]] = None,
@@ -204,8 +204,10 @@ def reward_combo(
     lpips_device: str = "cuda",
     reward_stats: Optional[Dict[str, float]] = None,
     return_components: bool = False,
-) -> float:
+) -> float | Tuple[float, Dict[str, float]]:
     if len(sel_idx) == 0:
+        if return_components:
+            return 0.0, {}
         return 0.0
     feats_sel = feats_all[sel_idx]
     if use_lpips_div and frames_all is not None:

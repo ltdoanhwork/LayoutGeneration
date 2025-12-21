@@ -39,6 +39,7 @@ class BatchEvaluationPipeline:
                  scene_device: str | None = None,
                  use_anime_attrs: int = 0,
                  anime_attrs_dim: int = 6,
+                 min_scene_len: int = 0,
                  debug: bool = False):
         self.videos_dir = videos_dir
         self.output_base_dir = output_base_dir
@@ -64,6 +65,7 @@ class BatchEvaluationPipeline:
         self.scene_device = scene_device
         self.use_anime_attrs = use_anime_attrs
         self.anime_attrs_dim = anime_attrs_dim
+        self.min_scene_len = min_scene_len
         self.pipeline_out_dir = os.path.join(output_base_dir, "pipeline_results")
         self.eval_out_dir = os.path.join(output_base_dir, "eval_results")
         os.makedirs(self.pipeline_out_dir, exist_ok=True)
@@ -94,6 +96,7 @@ class BatchEvaluationPipeline:
             "--resize_h", str(self.resize_h),
             "--embedder", self.embedder,
             "--backend", self.backend,
+            "--min_scene_len", str(self.min_scene_len),
             ]
             if self.checkpoint:
                 cmd += ["--checkpoint", self.checkpoint]
@@ -252,8 +255,22 @@ class BatchEvaluationPipeline:
         def safe_mean(xs): 
             vals = [x for x in xs if x is not None and not (isinstance(x,float) and np.isnan(x))]
             return float(np.mean(vals)) if vals else None
+        
+        def safe_std(xs):
+            vals = [x for x in xs if x is not None and not (isinstance(x,float) and np.isnan(x))]
+            return float(np.std(vals)) if len(vals) > 1 else None
+        
         if self.results:
             rec = []; fre = []; scov=[]; tcov=[]; lp_gap=[]; lp_div=[]; ms=[]
+            # V6: Per-attribute anime metrics
+            anime_attrs = {
+                "Anime_Sharpness": [], "Anime_Colorfulness": [], "Anime_Brightness": [],
+                "Anime_Sakuga": [], "Anime_Cinematic": [], "Anime_Expression": []
+            }
+            top_k_recalls = []
+            top_k_precisions = []
+            quality_improvements = []
+            
             for vid, r in self.results.items():
                 # Metrics are nested: r["metrics"]["method"] contains DSN results
                 # Extra metrics are at top level of r["metrics"] usually
@@ -269,6 +286,19 @@ class BatchEvaluationPipeline:
                 lp_gap.append(root.get("LPIPS_PerceptualGap", m.get("LPIPS_PerceptualGap")))
                 lp_div.append(root.get("LPIPS_DiversitySel", m.get("LPIPS_DiversitySel")))
                 ms.append(root.get("MS_SWD_Color", m.get("MS_SWD_Color")))
+                
+                # V6: Anime quality metrics
+                anime_attrs["Anime_Sharpness"].append(root.get("Anime_Sharpness_Mean", m.get("Anime_Sharpness_Mean")))
+                anime_attrs["Anime_Colorfulness"].append(root.get("Anime_Colorfulness_Mean", m.get("Anime_Colorfulness_Mean")))
+                anime_attrs["Anime_Brightness"].append(root.get("Anime_Brightness_Mean", m.get("Anime_Brightness_Mean")))
+                anime_attrs["Anime_Sakuga"].append(root.get("Anime_Sakuga_Mean", m.get("Anime_Sakuga_Mean")))
+                anime_attrs["Anime_Cinematic"].append(root.get("Anime_Cinematic_Mean", m.get("Anime_Cinematic_Mean")))
+                anime_attrs["Anime_Expression"].append(root.get("Anime_Expression_Mean", m.get("Anime_Expression_Mean")))
+                
+                # V6: Quality improvement metrics  
+                top_k_recalls.append(root.get("Top10_Recall", m.get("Top10_Recall")))
+                top_k_precisions.append(root.get("Top10_Precision", m.get("Top10_Precision")))
+                quality_improvements.append(root.get("Quality_Improvement", m.get("Quality_Improvement")))
             
             summary["aggregate_metrics"] = {
                 "RecErr_mean": safe_mean(rec),
@@ -279,6 +309,18 @@ class BatchEvaluationPipeline:
                 "LPIPS_DiversitySel_mean": safe_mean(lp_div),
                 "MS_SWD_Color_mean": safe_mean(ms),
             }
+            
+            # V6: Anime quality metrics with mean and std
+            summary["anime_quality_metrics"] = {}
+            for attr_name, values in anime_attrs.items():
+                summary["anime_quality_metrics"][f"{attr_name}_Mean"] = safe_mean(values)
+                summary["anime_quality_metrics"][f"{attr_name}_Std"] = safe_std(values)
+            
+            # V6: Top-k and quality improvement
+            summary["anime_quality_metrics"]["Top10_Recall_mean"] = safe_mean(top_k_recalls)
+            summary["anime_quality_metrics"]["Top10_Precision_mean"] = safe_mean(top_k_precisions)
+            summary["anime_quality_metrics"]["Quality_Improvement_mean"] = safe_mean(quality_improvements)
+            
         outp = os.path.join(self.output_base_dir, "summary_results.json")
         with open(outp, "w", encoding="utf-8") as f: json.dump(summary, f, indent=2, ensure_ascii=False)
         tqdm.write(f"\n📊 Summary saved to: {outp}")
@@ -310,16 +352,17 @@ def main():
                     help="Limit the number of videos to process")
     ps.add_argument("--num_workers", type=int, default=1)
     ps.add_argument("--debug", action="store_true")
-    ps.add_argument("--backend", type=str, default="pyscenedetect",
+    ps.add_argument("--backend", type=str, default="transnetv2",
                 help="Scene detector backend: pyscenedetect | transnetv2")
-    ps.add_argument("--threshold", type=float, default=27.0)
-    ps.add_argument("--model_dir", type=str, default=None)
+    ps.add_argument("--threshold", type=float, default=27.0, help="[pyscenedetect] threshold")
+    ps.add_argument("--model_dir", type=str, default="./src/models/TransNetV2", help="[transnetv2] model directory")
     ps.add_argument("--weights_path", type=str, default=None)
-    ps.add_argument("--prob_threshold", type=float, default=None)
+    ps.add_argument("--prob_threshold", type=float, default=0.5, help="[transnetv2] probability threshold")
     ps.add_argument("--scene_device", type=str, default=None)
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
+    ps.add_argument("--min_scene_len", type=int, default=48, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
 
@@ -332,7 +375,8 @@ def main():
     embedder=args.embedder, device=args.eval_device, debug=args.debug,
     backend=args.backend, threshold=args.threshold, model_dir=args.model_dir,
     weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device,
-    use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim
+    use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim,
+    min_scene_len=args.min_scene_len
     )
 
 
