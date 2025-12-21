@@ -268,17 +268,17 @@ def main():
                     help="Min scene length after normalize/merge (in frames of the SAMPLED stream).")
     
     # Scene detection backend + params
-    ap.add_argument("--backend", type=str, default="pyscenedetect", choices=scene_choices,
+    ap.add_argument("--backend", type=str, default="transnetv2", choices=scene_choices,
                     help="Scene detection backend.")
-    ap.add_argument("--threshold", type=float, default=None,
+    ap.add_argument("--threshold", type=float, default=27.0,
                     help="[pyscenedetect] ContentDetector threshold (default 27.0).")
-    ap.add_argument("--model_dir", type=str, default=None,
+    ap.add_argument("--model_dir", type=str, default="./src/models/TransNetV2",
                     help="[transnetv2] Directory containing weights/, or pass --weights_path.")
     ap.add_argument("--weights_path", type=str, default=None,
                     help="[transnetv2] Direct path to .pth weights (overrides model_dir).")
-    ap.add_argument("--prob_threshold", type=float, default=None,
+    ap.add_argument("--prob_threshold", type=float, default=0.5,
                     help="[transnetv2] Boundary probability threshold (default 0.5).")
-    ap.add_argument("--scene_device", type=str, default=None,
+    ap.add_argument("--scene_device", type=str, default="cuda",
                     help="[transnetv2] Device for model ('cuda'/'cpu').")
     # Export preview
     ap.add_argument("--export_preview", action="store_true")

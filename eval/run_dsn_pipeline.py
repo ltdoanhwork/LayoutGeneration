@@ -36,20 +36,104 @@ Example:
 
 from __future__ import annotations
 import os
+import sys
 import csv
 import json
 import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
+# RAFT core path (adjust if needed)
+RAFT_PATH = Path(__file__).parent.parent / "repos" / "RAFT" / "core"
+sys.path.insert(0, str(RAFT_PATH))
+
 import numpy as np
 import cv2
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from src.scene_detection import create_detector, available_detectors, Scene
 from src.models.dsn import EncoderFC, DSNPolicy
 from src.models.dsn_advanced import DSNAdvanced, DSNConfig
+from src.models.dsn_v8 import DSNMultiTaskV8, create_dsn_v8
+
+try:
+    from raft import RAFT
+    from utils.utils import InputPadder
+    RAFT_AVAILABLE = True
+except ImportError:
+    print("[run_dsn_pipeline] RAFT core not found. Motion features will be disabled.")
+    RAFT_AVAILABLE = False
+
+
+# -----------------------------
+# RAFT / Motion Utilities
+# -----------------------------
+class MotionFeatureExtractor(nn.Module):
+    """Extract compact motion features from RAFT flow fields. (V8 version)"""
+    def __init__(self, motion_dim: int = 128):
+        super().__init__()
+        self.motion_dim = motion_dim
+        self.conv1 = nn.Conv2d(2, 64, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((4, 4))
+        self.fc = nn.Linear(128 * 4 * 4, motion_dim)
+        
+    def forward(self, flow: torch.Tensor) -> torch.Tensor:
+        x = F.relu(self.conv1(flow))
+        x = F.relu(self.conv2(x))
+        x = self.adaptive_pool(x)
+        x = x.flatten(1)
+        x = self.fc(x)
+        return x
+
+def load_raft_model(model_path: str, device: torch.device, small: bool = True):
+    if not RAFT_AVAILABLE: return None
+    class Args:
+        def __init__(self):
+            self.small = small
+            self.mixed_precision = False
+            self.alternate_corr = False
+            self.dropout = 0
+        def __contains__(self, key): return hasattr(self, key)
+    
+    args = Args()
+    model = RAFT(args)
+    checkpoint = torch.load(model_path, map_location=device)
+    state_dict = checkpoint.get('state_dict', checkpoint.get('model', checkpoint))
+    new_state_dict = {k.replace('module.', ''): v for k, v in state_dict.items()}
+    model.load_state_dict(new_state_dict)
+    model.to(device)
+    model.eval()
+    return model
+
+def compute_motion_features(
+    raft_model,
+    motion_extractor: MotionFeatureExtractor,
+    frames: List[np.ndarray],
+    device: torch.device
+) -> np.ndarray:
+    T = len(frames)
+    if T < 2: return np.zeros((T, motion_extractor.motion_dim), dtype=np.float32)
+    
+    motion_feats = []
+    with torch.no_grad():
+        for t in range(T - 1):
+            # img1, img2: (1, 3, H, W)
+            img1 = torch.from_numpy(cv2.cvtColor(frames[t], cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float().unsqueeze(0).to(device)
+            img2 = torch.from_numpy(cv2.cvtColor(frames[t + 1], cv2.COLOR_BGR2RGB)).permute(2, 0, 1).float().unsqueeze(0).to(device)
+            
+            padder = InputPadder(img1.shape)
+            img1_p, img2_p = padder.pad(img1, img2)
+            _, flow_up = raft_model(img1_p, img2_p, iters=20, test_mode=True)
+            flow = flow_up[:, :, :img1.shape[2], :img1.shape[3]]
+            feat = motion_extractor(flow)
+            motion_feats.append(feat.cpu().numpy())
+            
+        motion_feats.append(motion_feats[-1]) # same for last frame
+    return np.concatenate(motion_feats, axis=0)
+from src.models.dsn_v8 import DSNMultiTaskV8, create_dsn_v8
 
 
 # -----------------------------
@@ -385,7 +469,7 @@ def main():
     parser.add_argument(
         "--backend",
         type=str,
-        default="pyscenedetect",
+        default="transnetv2",
         choices=available_detectors(),
     )
     parser.add_argument("--threshold", type=float, default=None, help="[pyscenedetect] ContentDetector threshold.")
@@ -406,6 +490,11 @@ def main():
     # Anime-CLIP-IQA
     parser.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes (0 or 1)")
     parser.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
+
+    # RAFT Motion
+    parser.add_argument("--use_raft_motion", type=int, default=0, help="Use RAFT motion features (0 or 1)")
+    parser.add_argument("--raft_model", type=str, default="repos/RAFT/models/raft-small.pth")
+    parser.add_argument("--motion_dim", type=int, default=128)
 
     args = parser.parse_args()
 
@@ -469,8 +558,94 @@ def main():
         print(f"[run_dsn_pipeline] Loading checkpoint from {args.checkpoint}")
         ckpt = torch.load(args.checkpoint, map_location=dev)
         
-        # Check if it's an advanced model checkpoint
-        if "model_type" in ckpt and ckpt["model_type"] == "advanced":
+        # Check for V7/Unified checkpoint (has model_state_dict and config)
+        if "model_state_dict" in ckpt:
+            config_dict = ckpt["config"]
+            
+            # V8 Detection
+            if config_dict.get("version") == "V8":
+                print("[run_dsn_pipeline] Detected V8 Constrained Multi-Task DSN model")
+                # Replicate training script feat_dim computation:
+                # feat_dim = base_feat_dim + anime_attrs_dim (if use_anime_attrs) + motion_dim (if use_raft_motion)
+                base_feat_dim = config_dict.get("feat_dim", 512)
+                c_feat_dim = base_feat_dim
+                
+                if config_dict.get("use_anime_attrs", 0):
+                    anime_dim = config_dict.get("anime_attrs_dim", 6)
+                    c_feat_dim += anime_dim
+                    args.use_anime_attrs = 1
+                    args.anime_attrs_dim = anime_dim
+                    print(f"[run_dsn_pipeline] Auto-enabled Anime attrs (dim={anime_dim})")
+                
+                if config_dict.get("use_raft_motion", 0):
+                    motion_dim = config_dict.get("motion_dim", 128)
+                    c_feat_dim += motion_dim
+                    args.use_raft_motion = 1
+                    args.motion_dim = motion_dim
+                    print(f"[run_dsn_pipeline] Auto-enabled RAFT Motion (dim={motion_dim})")
+                
+                print(f"[run_dsn_pipeline] Final feat_dim={c_feat_dim}")
+
+                model = create_dsn_v8(
+                    feat_dim=c_feat_dim,
+                    hidden_dim=config_dict.get("enc_hidden", args.enc_hidden),
+                    lstm_hidden=config_dict.get("lstm_hidden", args.lstm_hidden),
+                ).to(dev).eval()
+                model.load_state_dict(ckpt["model_state_dict"])
+                model_type = "v8"
+            else:
+                print("[run_dsn_pipeline] Detected V7/Unified DSN model")
+                # Replicate training script feat_dim computation (same as V8)
+                base_feat_dim = config_dict.get("feat_dim", 512)
+                c_feat_dim = base_feat_dim
+                
+                if config_dict.get("use_anime_attrs", 0):
+                    anime_dim = config_dict.get("anime_attrs_dim", 6)
+                    c_feat_dim += anime_dim
+                    args.use_anime_attrs = 1
+                    args.anime_attrs_dim = anime_dim
+                    print(f"[run_dsn_pipeline] Auto-enabled Anime attrs (dim={anime_dim})")
+                
+                if config_dict.get("use_raft_motion", 0):
+                    motion_dim = config_dict.get("motion_dim", 128)
+                    c_feat_dim += motion_dim
+                    args.use_raft_motion = 1
+                    args.motion_dim = motion_dim
+                    print(f"[run_dsn_pipeline] Auto-enabled RAFT Motion (dim={motion_dim})")
+                
+                print(f"[run_dsn_pipeline] Final feat_dim={c_feat_dim}")
+                
+                from src.models.dsn_multitask import create_dsn_multitask
+                model = create_dsn_multitask(
+                    feat_dim=c_feat_dim,
+                    hidden_dim=config_dict.get("enc_hidden", args.enc_hidden),
+                    lstm_hidden=config_dict.get("lstm_hidden", args.lstm_hidden),
+                ).to(dev).eval()
+                model.load_state_dict(ckpt["model_state_dict"])
+                model_type = "multitask_v7"
+
+        # Check for V5 multi-task model
+        elif "model_type" in ckpt and "multitask" in ckpt["model_type"]:
+            model_type = "multitask_v5"
+            print("[run_dsn_pipeline] Detected V5 Multi-Task DSN model")
+            config = ckpt["config"]
+            
+            # Auto-detect if anime_attrs were used in training
+            if config.feat_dim > emb_dim:
+                use_anime_attrs_auto = True
+                print(f"[run_dsn_pipeline] Auto-detected Anime-CLIP-IQA (feat_dim={config.feat_dim} > emb_dim={emb_dim})")
+                args.use_anime_attrs = 1
+                args.anime_attrs_dim = config.feat_dim - emb_dim
+            
+            from src.models.dsn_multitask import DSNMultiTask
+            model = DSNMultiTask(config).to(dev).eval()
+            model.load_state_dict(ckpt["model"])
+            print(f"  Config: {config}")
+            if "merge_weight" in ckpt:
+                print(f"  Merge weight (α): {ckpt['merge_weight']:.3f}")
+        
+        # Check if it's an advanced model checkpoint (v3 or v4)
+        elif "model_type" in ckpt and ("advanced" in ckpt["model_type"]):
             model_type = "advanced"
             print("[run_dsn_pipeline] Detected advanced DSN model")
             config = ckpt["config"]
@@ -485,7 +660,6 @@ def main():
             model = DSNAdvanced(config).to(dev).eval()
             model.load_state_dict(ckpt["model"])
             print(f"  Config: {config}")
-            print(f"  Parameters: {sum(p.numel() for p in model.parameters()):,}")
         else:
             # Baseline model
             model_type = "baseline"
@@ -500,6 +674,13 @@ def main():
         model_type = "baseline"
         enc = EncoderFC(args.feat_dim, args.enc_hidden).to(dev).eval()
         pol = DSNPolicy(args.enc_hidden, args.lstm_hidden).to(dev).eval()
+
+    # Load RAFT if needed
+    raft_model, motion_extractor = None, None
+    if args.use_raft_motion:
+        print(f"[run_dsn_pipeline] Loading RAFT from {args.raft_model}")
+        raft_model = load_raft_model(args.raft_model, dev)
+        motion_extractor = MotionFeatureExtractor(args.motion_dim).to(dev).eval()
 
     # 4) Per-scene inference
     scene_rows: List[Dict[str, Any]] = []
@@ -521,16 +702,25 @@ def main():
 
         feats = encode(frames)  # (T, D)
         
-        # Compute and concatenate anime_attrs if needed
+        # Compute and concatenate extra features
+        extra_feats = []
         if args.use_anime_attrs:
             try:
                 anime_attrs = compute_anime_attrs(frames, device=dev)  # (T, K)
-                # Align T
-                T_min = min(len(feats), len(anime_attrs))
-                feats = np.concatenate([feats[:T_min], anime_attrs[:T_min]], axis=1)
+                extra_feats.append(anime_attrs)
             except Exception as e:
                 print(f"  [Warning] Failed to compute anime attrs: {e}")
         
+        if args.use_raft_motion and raft_model:
+            try:
+                motion_feats = compute_motion_features(raft_model, motion_extractor, frames, dev)
+                extra_feats.append(motion_feats)
+            except Exception as e:
+                print(f"  [Warning] Failed to compute motion features: {e}")
+
+        if extra_feats:
+            feats = np.concatenate([feats] + extra_feats, axis=1)
+
         T = feats.shape[0]
         if T == 0:
             continue
@@ -541,9 +731,17 @@ def main():
             if model_type == "baseline":
                 h = enc(x)                  # (1, T, H)
                 probs = pol(h).squeeze(0)   # (T,)
-            else:  # advanced
+            elif model_type in ["advanced", "multitask_v5", "multitask_v7"]:
+                # Both advanced and multitask_v5/v7 share same interface
                 scene_id = f"scene_{sid}"
                 probs = model(x, scene_id=scene_id).squeeze(0)  # (T,)
+            elif model_type == "v8":
+                # V8 model outputs (probs, values, [alpha])
+                out = model(x)
+                if isinstance(out, tuple):
+                    probs = out[0].squeeze(0)
+                else:
+                    probs = out.squeeze(0)
             probs = torch.clamp(probs, 1e-6, 1 - 1e-6)
         probs_np = probs.cpu().numpy().astype(np.float32)
 

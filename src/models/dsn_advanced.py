@@ -70,6 +70,10 @@ class DSNConfig:
     # Efficiency
     use_gradient_checkpointing: bool = False
     use_sparse_attention: bool = False  # For T > 500
+    
+    # V4: Actor-Critic configuration
+    use_actor_critic: bool = False  # Enable value head for PPO
+    value_hidden_dim: int = 256     # Hidden dim for value network
 
 
 # ============================================================================
@@ -672,6 +676,9 @@ class DSNAdvanced(nn.Module):
     """
     Complete advanced DSN model combining encoder and policy.
     Drop-in replacement for baseline DSN with enhanced capabilities.
+    
+    V4 Enhancement: Optional Actor-Critic architecture with value head
+    for PPO training with learned baseline.
     """
     
     def __init__(self, config: DSNConfig):
@@ -688,22 +695,109 @@ class DSNAdvanced(nn.Module):
             cache_size=config.cache_size
         )
         
-        # Policy
+        # Policy (Actor)
         self.policy = DSNPolicyAdvanced(config)
+        
+        # V4: Value head (Critic) for Actor-Critic
+        self.use_actor_critic = config.use_actor_critic
+        if config.use_actor_critic:
+            from src.models.value_network import ValueHead
+            # Get LSTM output dimension for value head input
+            if config.use_lstm:
+                lstm_out_dim = config.lstm_hidden * (2 if config.bidirectional else 1)
+            else:
+                lstm_out_dim = config.hidden_dim
+            
+            self.value_head = ValueHead(
+                input_dim=lstm_out_dim,
+                hidden_dim=config.value_hidden_dim,
+                output_type="frame",
+                dropout=config.dropout
+            )
+        else:
+            self.value_head = None
     
-    def forward(self, x: torch.Tensor, scene_id: Optional[str] = None, 
-                motion_feats: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        scene_id: Optional[str] = None, 
+        motion_feats: Optional[torch.Tensor] = None,
+        return_value: bool = False
+    ):
         """
         Args:
             x: (B, T, D) input CLIP features
             scene_id: Optional scene ID for caching
             motion_feats: Optional (B, T, D_m) motion features from RAFT
+            return_value: If True and model has value head, return (probs, values)
         Returns:
             probs: (B, T) selection probabilities
+            values: (B, T) value estimates (only if return_value=True and use_actor_critic=True)
         """
         h = self.encoder(x, scene_id)
         probs = self.policy(h, motion_feats)
+        
+        # V4: Return value estimates for Actor-Critic
+        if return_value and self.use_actor_critic and self.value_head is not None:
+            # Get encoded features after LSTM for value estimation
+            h_encoded = self._get_encoded_for_value(h, motion_feats)
+            values = self.value_head(h_encoded)
+            return probs, values
+        
         return probs
+    
+    def _get_encoded_for_value(self, h: torch.Tensor, motion_feats: Optional[torch.Tensor]) -> torch.Tensor:
+        """
+        Get encoded features suitable for value head.
+        This replicates the policy's encoding path up to LSTM output.
+        
+        Args:
+            h: (B, T, H) hidden features from encoder
+            motion_feats: Optional motion features
+        Returns:
+            (B, T, D_lstm) encoded features
+        """
+        policy = self.policy
+        
+        # Motion fusion
+        if policy.use_motion and motion_feats is not None and policy.motion_fusion is not None:
+            h = policy.motion_fusion(motion_feats, h)
+        
+        # Positional encoding
+        if policy.pos_encoder is not None:
+            h = policy.pos_encoder(h)
+        
+        # Multi-scale temporal modeling
+        h = policy.multi_scale(h)
+        
+        # Self-attention layers
+        for attn_layer in policy.attn_layers:
+            h = attn_layer(h)
+        
+        # LSTM (this gives us the features before the policy head)
+        if policy.use_lstm:
+            h, _ = policy.lstm(h)
+        
+        return h
+    
+    def get_value_only(self, x: torch.Tensor, scene_id: Optional[str] = None,
+                       motion_feats: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Get only value estimates (useful for GAE computation).
+        
+        Args:
+            x: (B, T, D) input features
+            scene_id: Optional scene ID
+            motion_feats: Optional motion features
+        Returns:
+            values: (B, T) value estimates
+        """
+        if not self.use_actor_critic or self.value_head is None:
+            raise RuntimeError("Value head not available. Set use_actor_critic=True in config.")
+        
+        h = self.encoder(x, scene_id)
+        h_encoded = self._get_encoded_for_value(h, motion_feats)
+        return self.value_head(h_encoded)
     
     def get_cache_stats(self) -> Optional[Dict[str, int]]:
         """Get encoder cache statistics."""
