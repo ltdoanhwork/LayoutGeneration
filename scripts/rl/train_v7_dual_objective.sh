@@ -31,7 +31,7 @@ REC_ERR_SCALE=3.0        # RecErr reward scale
 FRECHET_SCALE=2.0        # Frechet distance scale
 DIVERSITY_WEIGHT=1.0     # Diversity bonus weight
 COVERAGE_WEIGHT=1.0      # Temporal coverage weight
-ANIME_SCALE=2.5          # Anime quality scale (balanced with RecErr)
+ANIME_SCALE=4.0          # Anime quality scale (aggressive optimization)
 TOP_K_RATIO=0.1          # Top 10% quality frames
 USE_CURRICULUM=1         # Enable curriculum learning
 
