@@ -43,6 +43,16 @@ import argparse
 from pathlib import Path
 from typing import List, Tuple, Dict, Any
 
+# Import distribution metrics for evaluation
+try:
+    from src.rl.distribution_metrics import (
+        DistributionAwareMetrics,
+        compute_distribution_metrics_for_eval,
+    )
+    HAS_DISTRIBUTION_METRICS = True
+except ImportError:
+    HAS_DISTRIBUTION_METRICS = False
+
 # RAFT core path (adjust if needed)
 RAFT_PATH = Path(__file__).parent.parent / "repos" / "RAFT" / "core"
 sys.path.insert(0, str(RAFT_PATH))
@@ -456,9 +466,9 @@ def main():
     parser.add_argument("--lstm_hidden", type=int, default=128)
 
     # Budget
-    parser.add_argument("--budget_ratio", type=float, default=0.06)
-    parser.add_argument("--Bmin", type=int, default=3)
-    parser.add_argument("--Bmax", type=int, default=15)
+    parser.add_argument("--budget_ratio", type=float, default=0.05)
+    parser.add_argument("--Bmin", type=int, default=2)
+    parser.add_argument("--Bmax", type=int, default=5)
 
     # Sampling / resize
     parser.add_argument("--sample_stride", type=int, default=5)
@@ -477,7 +487,7 @@ def main():
     parser.add_argument("--weights_path", type=str, default=None, help="[transnetv2] direct .pth path (override model_dir)")
     parser.add_argument("--prob_threshold", type=float, default=0.5, help="[transnetv2] boundary probability threshold.")
     parser.add_argument("--scene_device", type=str, default="cuda", help="[transnetv2] device for model ('cuda'/'cpu').")
-    parser.add_argument("--min_scene_len", type=int, default=0, help="Minimum scene length (frames). Shorter scenes are merged into previous one.")
+    parser.add_argument("--min_scene_len", type=int, default=80, help="Minimum scene length (frames). Shorter scenes are merged into previous one.")
 
     # Embedder
     parser.add_argument(
@@ -686,6 +696,11 @@ def main():
     scene_rows: List[Dict[str, Any]] = []
     key_rows: List[Dict[str, Any]] = []
     all_prob_rows: List[Dict[str, Any]] = []  # Store ALL frame probabilities for visualization
+    
+    # For distribution metrics
+    all_anime_attrs: List[np.ndarray] = []  # Store anime attrs per scene
+    all_sel_local_indices: List[List[int]] = []  # Selected indices per scene
+    all_gidx: List[List[int]] = []  # Global indices per scene
 
     resize_tuple = (args.resize_w, args.resize_h)
 
@@ -753,6 +768,12 @@ def main():
             Bmax=args.Bmax,
         )
         
+        # Store for distribution metrics
+        if args.use_anime_attrs and 'anime_attrs' in dir():
+            all_anime_attrs.append(anime_attrs)
+            all_sel_local_indices.append(sel_local)
+            all_gidx.append(gidx)
+        
         # Save ALL frame probabilities (for visualization)
         for li in range(len(frames)):
             gi = gidx[li]
@@ -814,6 +835,47 @@ def main():
         writer.writeheader()
         for r in all_prob_rows:
             writer.writerow(r)
+
+    # 6) Compute and save distribution metrics (if anime attrs were computed)
+    if HAS_DISTRIBUTION_METRICS and all_anime_attrs:
+        # Concatenate all anime attrs and compute combined selection indices
+        combined_attrs = np.concatenate(all_anime_attrs, axis=0)
+        
+        # Map local selection indices to combined indices
+        combined_sel_idx = []
+        offset = 0
+        for scene_attrs, scene_sel in zip(all_anime_attrs, all_sel_local_indices):
+            for local_idx in scene_sel:
+                if local_idx < len(scene_attrs):
+                    combined_sel_idx.append(offset + local_idx)
+            offset += len(scene_attrs)
+        
+        # Compute distribution metrics
+        dist_metrics = compute_distribution_metrics_for_eval(combined_attrs, combined_sel_idx)
+        
+        # Get visualization data
+        metrics_computer = DistributionAwareMetrics()
+        viz_data = metrics_computer.get_selection_distribution_data(combined_attrs, combined_sel_idx)
+        
+        # Build distribution data
+        video_id = Path(video_path).stem
+        distribution_data = {
+            "video_id": video_id,
+            "video_path": str(video_path),
+            "total_sampled_frames": len(combined_attrs),
+            "num_selected": len(combined_sel_idx),
+            "num_scenes": len(scenes),
+            "frame_indices_selected": combined_sel_idx,
+            "attrs_all": combined_attrs.tolist(),
+            "metrics": dist_metrics,
+        }
+        
+        # Save distribution data
+        with open(out_dir / "distribution.json", "w", encoding="utf-8") as f:
+            json.dump(distribution_data, f, indent=2)
+        
+        print(f"  📊 Distribution metrics saved: mean_percentile={dist_metrics.get('mean_percentile_rank', 0):.3f}, "
+              f"top10_coverage={dist_metrics.get('top_10_coverage', 0):.1%}")
 
     print(
         f"[run_dsn_pipeline] Done for {video_path}. "

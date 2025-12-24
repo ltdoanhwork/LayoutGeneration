@@ -227,6 +227,19 @@ class BatchEvaluationPipeline:
                 "timestamp": datetime.now().isoformat()
             }
             
+            # 4) Load distribution metrics if available
+            dist_json = os.path.join(extraction["output_dir"], "distribution.json")
+            if os.path.exists(dist_json):
+                try:
+                    with open(dist_json, "r", encoding="utf-8") as f:
+                        dist_data = json.load(f)
+                    dist_metrics = dist_data.get("metrics", {})
+                    self.results[video_id]["distribution_metrics"] = dist_metrics
+                    tqdm.write(f"  📊 Distribution: mean_percentile={dist_metrics.get('mean_percentile_rank', 0):.3f}, "
+                              f"top10_cov={dist_metrics.get('top_10_coverage', 0):.1%}")
+                except Exception as e:
+                    if self.debug: print(f"  [Warning] Failed to load distribution metrics: {e}")
+            
             # Extract metrics for logging (handle nesting if with_baselines=True)
             std_m = metrics.get("method", metrics)
             tqdm.write(f"  📊 RecErr: {std_m.get('RecErr', 'N/A')} "
@@ -321,9 +334,49 @@ class BatchEvaluationPipeline:
             summary["anime_quality_metrics"]["Top10_Precision_mean"] = safe_mean(top_k_precisions)
             summary["anime_quality_metrics"]["Quality_Improvement_mean"] = safe_mean(quality_improvements)
             
+            # NEW: Distribution-aware metrics aggregation
+            dist_percentiles = []
+            dist_top10_coverages = []
+            dist_top25_coverages = []
+            dist_zscores = []
+            dist_above_p90 = []
+            dist_above_median = []
+            
+            for vid, r in self.results.items():
+                d = r.get("distribution_metrics", {})
+                if d:
+                    dist_percentiles.append(d.get("mean_percentile_rank"))
+                    dist_top10_coverages.append(d.get("top_10_coverage"))
+                    dist_top25_coverages.append(d.get("top_25_coverage"))
+                    dist_zscores.append(d.get("zscore_improvement"))
+                    dist_above_p90.append(d.get("above_p90_ratio"))
+                    dist_above_median.append(d.get("above_median_ratio"))
+            
+            if any(dist_percentiles):
+                summary["distribution_metrics"] = {
+                    "mean_percentile_rank_mean": safe_mean(dist_percentiles),
+                    "mean_percentile_rank_std": safe_std(dist_percentiles),
+                    "top_10_coverage_mean": safe_mean(dist_top10_coverages),
+                    "top_10_coverage_std": safe_std(dist_top10_coverages),
+                    "top_25_coverage_mean": safe_mean(dist_top25_coverages),
+                    "zscore_improvement_mean": safe_mean(dist_zscores),
+                    "zscore_improvement_std": safe_std(dist_zscores),
+                    "above_p90_ratio_mean": safe_mean(dist_above_p90),
+                    "above_median_ratio_mean": safe_mean(dist_above_median),
+                }
+            
         outp = os.path.join(self.output_base_dir, "summary_results.json")
         with open(outp, "w", encoding="utf-8") as f: json.dump(summary, f, indent=2, ensure_ascii=False)
         tqdm.write(f"\n📊 Summary saved to: {outp}")
+        
+        # Print distribution summary if available
+        if "distribution_metrics" in summary:
+            d = summary["distribution_metrics"]
+            tqdm.write(f"\n📈 Distribution Metrics (Test Set):")
+            tqdm.write(f"   Mean Percentile Rank: {d.get('mean_percentile_rank_mean', 0):.3f} ± {d.get('mean_percentile_rank_std', 0):.3f}")
+            tqdm.write(f"   Top-10% Coverage:     {d.get('top_10_coverage_mean', 0):.1%} ± {d.get('top_10_coverage_std', 0):.1%}")
+            tqdm.write(f"   Z-Score Improvement:  {d.get('zscore_improvement_mean', 0):.3f} ± {d.get('zscore_improvement_std', 0):.3f}")
+            tqdm.write(f"   Above P90 Ratio:      {d.get('above_p90_ratio_mean', 0):.1%}")
 
 def main():
     ps = argparse.ArgumentParser("Batch eval with DSN")
@@ -334,9 +387,9 @@ def main():
     ps.add_argument("--feat_dim", type=int, default=512)
     ps.add_argument("--enc_hidden", type=int, default=256)
     ps.add_argument("--lstm_hidden", type=int, default=128)
-    ps.add_argument("--budget_ratio", type=float, default=0.06)
-    ps.add_argument("--Bmin", type=int, default=3)
-    ps.add_argument("--Bmax", type=int, default=15)
+    ps.add_argument("--budget_ratio", type=float, default=0.05)
+    ps.add_argument("--Bmin", type=int, default=2)
+    ps.add_argument("--Bmax", type=int, default=5)
     ps.add_argument("--sample_stride", type=int, default=5)
     ps.add_argument("--resize_w", type=int, default=320)
     ps.add_argument("--resize_h", type=int, default=180)
@@ -362,7 +415,7 @@ def main():
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
-    ps.add_argument("--min_scene_len", type=int, default=48, help="Min scene length to match prepare_rl_dataset")
+    ps.add_argument("--min_scene_len", type=int, default=80, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
 
