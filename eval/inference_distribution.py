@@ -160,16 +160,41 @@ def load_checkpoint_and_model(
         config = {}
     
     # Determine model version from config or checkpoint keys
-    version = config.get("version", "unknown")
+    def get_cfg(c, k, default=None):
+        if isinstance(c, dict):
+            return c.get(k, default)
+        return getattr(c, k, default)
+    
+    # Ensure config is a dictionary for easier access
+    if not isinstance(config, dict):
+        try:
+            from dataclasses import asdict
+            config_dict = asdict(config)
+            config = config_dict
+        except:
+            try:
+                config_dict = vars(config)
+                config = config_dict
+            except:
+                # Fallback: create a dict from known attributes
+                print("  ⚠️ Could not convert config to dict, using manual fallback.")
+                config_dict = {}
+                for attr in ["version", "feat_dim", "enc_hidden", "lstm_hidden", 
+                             "use_anime_attrs", "anime_attrs_dim", "use_raft_motion", "motion_dim"]:
+                    if hasattr(config, attr):
+                        config_dict[attr] = getattr(config, attr)
+                config = config_dict
+
+    version = get_cfg(config, "version", "unknown")
     
     # Get model parameters from config
-    feat_dim = config.get("feat_dim", 512)
-    enc_hidden = config.get("enc_hidden", 256)
-    lstm_hidden = config.get("lstm_hidden", 128)
-    use_anime_attrs = config.get("use_anime_attrs", 0)
-    anime_attrs_dim = config.get("anime_attrs_dim", 6)
-    use_raft_motion = config.get("use_raft_motion", 0)
-    motion_dim = config.get("motion_dim", 128)
+    feat_dim = get_cfg(config, "feat_dim", 512)
+    enc_hidden = get_cfg(config, "enc_hidden", 256)
+    lstm_hidden = get_cfg(config, "lstm_hidden", 128)
+    use_anime_attrs = get_cfg(config, "use_anime_attrs", 0)
+    anime_attrs_dim = get_cfg(config, "anime_attrs_dim", 6)
+    use_raft_motion = get_cfg(config, "use_raft_motion", 0)
+    motion_dim = get_cfg(config, "motion_dim", 128)
     
     # IMPORTANT: Detect actual feat_dim from checkpoint weights
     # This handles cases where config doesn't properly store use_anime_attrs/use_raft_motion
@@ -211,11 +236,19 @@ def load_checkpoint_and_model(
         total_feat_dim = expected_feat_dim
     
     # Store computed info in config for later use
-    config["_total_feat_dim"] = total_feat_dim
-    config["use_anime_attrs"] = use_anime_attrs
-    config["anime_attrs_dim"] = anime_attrs_dim
-    config["use_raft_motion"] = use_raft_motion
-    config["motion_dim"] = motion_dim
+    if isinstance(config, dict):
+        config["_total_feat_dim"] = total_feat_dim
+        config["use_anime_attrs"] = use_anime_attrs
+        config["anime_attrs_dim"] = anime_attrs_dim
+        config["use_raft_motion"] = use_raft_motion
+        config["motion_dim"] = motion_dim
+    else:
+        # Fallback if config is still an object
+        setattr(config, "_total_feat_dim", total_feat_dim)
+        setattr(config, "use_anime_attrs", use_anime_attrs)
+        setattr(config, "anime_attrs_dim", anime_attrs_dim)
+        setattr(config, "use_raft_motion", use_raft_motion)
+        setattr(config, "motion_dim", motion_dim)
     
     print(f"  Config: use_anime_attrs={use_anime_attrs}, use_raft_motion={use_raft_motion}, total_feat_dim={total_feat_dim}")
     
@@ -961,7 +994,7 @@ Usage:
     --Bmax 20
 
     python -m eval.inference_distribution \
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v9_quality_focused/dsn_v9_ep2.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v9_quality_focused/dsn_v9_ep3.pt \
     --videos_dir data/samples/Sakuga_test \
     --output_dir runs/dsn_v9_quality_focused/distribution_viz \
     --budget_ratio 0.05 \

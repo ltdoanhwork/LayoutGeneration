@@ -71,7 +71,7 @@ python -m src.pipeline.train_rl_dsn_v9 \
     \
     --val_videos_dir "$VAL_VIDEOS_DIR" \
     --val_output_dir "$VAL_OUTPUT_DIR" \
-    --validate_every 999 \\
+    --validate_every 999 \
     --eval_backend transnetv2 \
     --eval_embedder clip_vitb32
 
