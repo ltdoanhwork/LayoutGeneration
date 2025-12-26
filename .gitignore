@@ -17,6 +17,7 @@ outputs_detection
 outputs_detection_0.2
 objectfree/Grounded-SAM-2/checkpoints
 objectfree/Grounded-SAM-2/SAM_2.egg-info
+objectfree/Dinov3/*
 Pipeline
 data/*
 repos/*
