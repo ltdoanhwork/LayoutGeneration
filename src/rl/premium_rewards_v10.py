@@ -140,7 +140,7 @@ class PremiumRewardV10(PremiumRewardV9):
             rewards["vlm"] = vlm_reward * vlm_weight
             rewards["total"] += rewards["vlm"]
             
-            components.update({f"vlm_{k}": v in vlm_info.items()})
+            components.update({f"vlm_{k}": v for k, v in vlm_info.items()})
             components["vlm_weight"] = vlm_weight
             
         return rewards, components

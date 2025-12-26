@@ -12,7 +12,7 @@ VAL_OUT_DIR="runs/dsn_v10_val"
 
 # Model hyperparameters
 EPOCHS=60
-LR=2e-4
+LR=1e-4   # Lowered for stability
 BUDGET_RATIO=0.1
 B_MIN=3
 B_MAX=15
@@ -23,7 +23,7 @@ VLM_DECAY_EPOCHS=30
 DISTILL_LR=1e-4
 
 # Run Training
-python -m src.pipeline.train_rl_dsn_v10 \
+python3 -m src.pipeline.train_rl_dsn_v10 \
     --dataset_root "$DATA_ROOT" \
     --save_dir "$SAVE_DIR" \
     --epochs "$EPOCHS" \

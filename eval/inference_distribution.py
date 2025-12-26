@@ -27,6 +27,7 @@ Usage:
 """
 
 from __future__ import annotations
+import math
 import os
 import sys
 import json
@@ -71,59 +72,97 @@ def detect_scenes_simple(
     video_path: str,
     min_scene_len: int = 48,
     threshold: float = 27.0,
+    model_dir: str = None,
+    max_scene_len: int = 150,  # Max frames per scene before force-splitting
+    force_backend: str = None, # Optional: "transnetv2" or "pyscenedetect"
 ) -> List[Scene]:
     """
-    Scene detection with multiple backends.
+    Scene detection with multiple backends and forced splitting for coverage.
     
     Tries TransNetV2 first, then pyscenedetect, falls back to single scene.
-    
-    Args:
-        video_path: Path to video
-        min_scene_len: Minimum scene length in frames
-        threshold: Scene change threshold
-        
-    Returns:
-        List of Scene objects
+    Then splits long scenes to ensure temporal coverage.
     """
-    # Try TransNetV2 via run_dsn_pipeline
-    try:
-        from eval.run_dsn_pipeline import detect_scenes_generic
-        scenes = detect_scenes_generic(video_path, "transnetv2", min_scene_len=min_scene_len)
-        if scenes:
-            return scenes
-    except Exception as e:
-        pass  # Fall through to next method
+    scenes = []
     
-    # Try pyscenedetect (ContentDetector)
-    try:
-        from scenedetect import open_video, SceneManager
-        from scenedetect.detectors import ContentDetector
+    # Try requested backend first
+    backends = ["transnetv2", "pyscenedetect"]
+    if force_backend:
+        if force_backend == "transnetv2": backends = ["transnetv2"]
+        if force_backend == "pyscenedetect": backends = ["pyscenedetect"]
+    
+    for b_name in backends:
+        if b_name == "transnetv2" and model_dir:
+            try:
+                from eval.run_dsn_pipeline import detect_scenes_generic
+                scenes = detect_scenes_generic(
+                    video_path, "transnetv2", 
+                    min_scene_len=min_scene_len, 
+                    model_dir=model_dir
+                )
+                if scenes:
+                    if len(scenes) > 1 or force_backend == "transnetv2":
+                        print(f"  🎬 Using TransNetV2: {len(scenes)} scenes")
+                        return scenes
+            except Exception as e:
+                if force_backend == "transnetv2":
+                    print(f"  ⚠️ TransNetV2 failed: {e}")
+                pass
         
-        video = open_video(video_path)
-        scene_manager = SceneManager()
-        scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
-        scene_manager.detect_scenes(video)
-        scene_list = scene_manager.get_scene_list()
+        if b_name == "pyscenedetect":
+            try:
+                from scenedetect import open_video, SceneManager
+                from scenedetect.detectors import ContentDetector
+                
+                video = open_video(video_path)
+                scene_manager = SceneManager()
+                scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+                scene_manager.detect_scenes(video)
+                scene_list = scene_manager.get_scene_list()
+                
+                if scene_list:
+                    scenes = []
+                    for scene in scene_list:
+                        start_frame = scene[0].get_frames()
+                        end_frame = scene[1].get_frames() - 1
+                        if end_frame > start_frame:
+                            scenes.append(Scene(start_frame, end_frame))
+                    if scenes:
+                        if len(scenes) > 1 or force_backend == "pyscenedetect":
+                            print(f"  🎬 Using PySceneDetect: {len(scenes)} scenes")
+                            return scenes
+            except Exception as e:
+                if force_backend == "pyscenedetect":
+                    print(f"  ⚠️ PySceneDetect failed: {e}")
+                pass
+    
+    # Fallback: single scene
+    if not scenes:
+        cap = cv2.VideoCapture(video_path)
+        n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        cap.release()
+        scenes = [Scene(0, max(0, n_frames - 1))]
+        print(f"  📍 Using single scene (no detection)")
+
+    # FORCE SPLIT long scenes to ensure coverage
+    refined_scenes = []
+    for s in scenes:
+        S_start, S_end = s.start_frame, s.end_frame
+        S_len = S_end - S_start + 1
+        if S_len > max_scene_len:
+            n_splits = math.ceil(S_len / max_scene_len)
+            chunk_size = S_len // n_splits
+            curr = S_start
+            for i in range(n_splits):
+                chunk_end = curr + chunk_size if i < n_splits - 1 else S_end
+                refined_scenes.append(Scene(curr, chunk_end))
+                curr = chunk_end + 1
+        else:
+            refined_scenes.append(s)
+            
+    if len(refined_scenes) > len(scenes):
+        print(f"  ✂️ Force-split scenes into {len(refined_scenes)} chunks for coverage")
         
-        if scene_list:
-            scenes = []
-            for scene in scene_list:
-                start_frame = scene[0].get_frames()
-                end_frame = scene[1].get_frames() - 1
-                if end_frame > start_frame:
-                    scenes.append(Scene(start_frame, end_frame))
-            if scenes:
-                return scenes
-    except Exception as e:
-        print(f"  ⚠️ pyscenedetect failed ({e})")
-    
-    # Fallback: single scene for entire video
-    print(f"  📍 Using single scene (scene detection unavailable)")
-    cap = cv2.VideoCapture(video_path)
-    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    cap.release()
-    
-    return [Scene(0, max(0, n_frames - 1))]
+    return refined_scenes
 
 
 def load_checkpoint_and_model(
@@ -584,6 +623,9 @@ def process_video(
     Bmax: int = 15,
     use_scene_detection: bool = True,  # NEW: use scene detection
     min_scene_len: int = 48,           # NEW: minimum scene length
+    model_dir: str = None,             # Path to TransNetV2 weights
+    max_scene_len: int = 150,          # Force split long scenes
+    backend: str = None,               # Forced backend
 ) -> Dict[str, Any]:
     """
     Process a single video: detect scenes, extract features per-scene, run inference, merge results.
@@ -599,6 +641,8 @@ def process_video(
         budget_ratio, Bmin, Bmax: Budget settings
         use_scene_detection: Whether to detect scenes (default True)
         min_scene_len: Minimum scene length in frames
+        model_dir: Path for TransNetV2
+        max_scene_len: Max frames per forced scene split
         
     Returns:
         Dict with metrics and paths
@@ -621,9 +665,13 @@ def process_video(
     
     # Detect scenes
     if use_scene_detection:
-        print(f"  🎬 Detecting scenes...")
-        scenes = detect_scenes_simple(video_path, min_scene_len=min_scene_len)
-        print(f"  📍 Found {len(scenes)} scene(s)")
+        scenes = detect_scenes_simple(
+            video_path, 
+            min_scene_len=min_scene_len,
+            model_dir=model_dir,
+            max_scene_len=max_scene_len,
+            force_backend=backend
+        )
     else:
         scenes = [Scene(0, total_frames - 1)]
         print(f"  📍 Using single scene (no detection)")
@@ -826,6 +874,12 @@ def main():
                        help="Use scene detection (1=yes, 0=no)")
     parser.add_argument("--min_scene_len", type=int, default=48,
                        help="Minimum scene length in frames")
+    parser.add_argument("--model_dir", type=str, default="/home/serverai/ltdoanh/LayoutGeneration/src/models/TransNetV2",
+                       help="Path to TransNetV2 model directory")
+    parser.add_argument("--backend", type=str, default=None, choices=["transnetv2", "pyscenedetect"],
+                       help="Force a specific scene detector")
+    parser.add_argument("--max_scene_len", type=int, default=150,
+                       help="Force split scenes longer than this (at stride=1 basis)")
     
     args = parser.parse_args()
     
@@ -875,6 +929,9 @@ def main():
                 args.budget_ratio, args.Bmin, args.Bmax,
                 use_scene_detection=bool(args.use_scene_detection),
                 min_scene_len=args.min_scene_len,
+                model_dir=args.model_dir,
+                max_scene_len=args.max_scene_len,
+                backend=args.backend,
             )
             if "error" not in result:
                 results.append(result)
@@ -908,10 +965,17 @@ def main():
     }
     
     if results:
-        # Compute aggregate metrics
-        mean_percentiles = [r["metrics"]["mean_percentile_rank"] for r in results]
-        zscores = [r["metrics"]["zscore_improvement"] for r in results]
-        top10_covs = [r["metrics"]["top_10_coverage"] for r in results]
+        # 1) Global metrics
+        mean_percentiles = [r["metrics"].get("mean_percentile_rank", 0) for i, r in enumerate(results)]
+        zscores = [r["metrics"].get("zscore_improvement", 0) for r in results]
+        top10_covs = [r["metrics"].get("top_10_coverage", 0) for r in results]
+        above_p90s = [r["metrics"].get("above_p90_ratio", 0) for r in results]
+        mean_quality = [r["metrics"].get("mean_quality", 0) for r in results]
+        
+        # 2) Local (Per-scene) metrics
+        local_percentiles = [r["metrics"].get("local_mean_percentile_rank", 0) for r in results]
+        local_zscores = [r["metrics"].get("local_zscore_improvement", 0) for r in results]
+        local_top10s = [r["metrics"].get("local_top_10_coverage", 0) for r in results]
         
         summary["aggregate_metrics"] = {
             "mean_percentile_rank_mean": float(np.mean(mean_percentiles)),
@@ -920,7 +984,37 @@ def main():
             "zscore_improvement_std": float(np.std(zscores)),
             "top_10_coverage_mean": float(np.mean(top10_covs)),
             "top_10_coverage_std": float(np.std(top10_covs)),
+            "above_p90_ratio_mean": float(np.mean(above_p90s)),
+            "mean_quality_mean": float(np.mean(mean_quality)),
+            
+            # Local stats
+            "local_mean_percentile_rank_mean": float(np.mean(local_percentiles)),
+            "local_zscore_improvement_mean": float(np.mean(local_zscores)),
+            "local_top_10_coverage_mean": float(np.mean(local_top10s)),
         }
+    
+    # Save CSV summary
+    import csv
+    csv_path = os.path.join(args.output_dir, "batch_comparison.csv")
+    if results:
+        with open(csv_path, 'w', newline='') as f:
+            header = ["video_id", "n_sel", "n_frames", "mean_percentile", "local_percentile", "zscore", "local_zscore", "top_10_cov", "local_top_10_cov", "above_p90"]
+            writer = csv.DictWriter(f, fieldnames=header)
+            writer.writeheader()
+            for r in results:
+                m = r["metrics"]
+                writer.writerow({
+                    "video_id": r["video_id"],
+                    "n_sel": r["n_selected"],
+                    "n_frames": r["n_frames"],
+                    "mean_percentile": f"{m.get('mean_percentile_rank', 0):.4f}",
+                    "local_percentile": f"{m.get('local_mean_percentile_rank', 0):.4f}",
+                    "zscore": f"{m.get('zscore_improvement', 0):.4f}",
+                    "local_zscore": f"{m.get('local_zscore_improvement', 0):.4f}",
+                    "top_10_cov": f"{m.get('top_10_coverage', 0):.4f}",
+                    "local_top_10_cov": f"{m.get('local_top_10_coverage', 0):.4f}",
+                    "above_p90": f"{m.get('above_p90_ratio', 0):.4f}",
+                })
     
     summary_path = os.path.join(args.output_dir, "inference_summary.json")
     with open(summary_path, 'w') as f:
@@ -932,10 +1026,18 @@ def main():
     print(f"Processed: {len(results)} videos")
     if summary["aggregate_metrics"]:
         agg = summary["aggregate_metrics"]
-        print(f"\n📊 Aggregate Metrics:")
+        print(f"\n📊 Aggregate Metrics (Global-Dataset Scale):")
         print(f"   Mean Percentile Rank: {agg['mean_percentile_rank_mean']:.3f} ± {agg['mean_percentile_rank_std']:.3f}")
         print(f"   Z-Score Improvement:  {agg['zscore_improvement_mean']:.3f} ± {agg['zscore_improvement_std']:.3f}")
         print(f"   Top-10% Coverage:     {agg['top_10_coverage_mean']:.1%} ± {agg['top_10_coverage_std']:.1%}")
+        print(f"   Above P90 Ratio:      {agg.get('above_p90_ratio_mean', 0):.1%}")
+        
+        print(f"\n📍 Local Metrics (Per-Scene Average):")
+        print(f"   Mean Percentile Rank: {agg.get('local_mean_percentile_rank_mean', 0):.3f}")
+        print(f"   Z-Score Improvement:  {agg.get('local_zscore_improvement_mean', 0):.3f}")
+        print(f"   Top-10% Coverage:     {agg.get('local_top_10_coverage_mean', 0):.1%}")
+    
+    print(f"\n📁 CSV Report: {csv_path}")
     print(f"\n📁 Results saved to: {args.output_dir}")
 
 
@@ -994,7 +1096,7 @@ Usage:
     --Bmax 20
 
     python -m eval.inference_distribution \
-    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v9_quality_focused/dsn_v9_ep3.pt \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v9_quality_focused/dsn_v9_ep15.pt \
     --videos_dir data/samples/Sakuga_test \
     --output_dir runs/dsn_v9_quality_focused/distribution_viz \
     --budget_ratio 0.05 \
@@ -1006,6 +1108,22 @@ Usage:
         --videos_dir data/samples/Sakuga_test \
         --output_dir runs/dsn_v5_anime_focus/distribution_viz \
         --budget_ratio 0.05 \
-        --Bmin 5 \ 
+        --Bmin 5 \
         --Bmax 10
+
+    python -m eval.inference_distribution \
+        --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v10_vlm_guided/dsn_v10_ep2.pt \
+        --videos_dir data/samples/Sakuga_test \
+        --output_dir runs/dsn_v10_vlm_guided/distribution_viz \
+        --budget_ratio 0.15 \
+        --Bmin 1 \
+        --Bmax 10
+
+    python -m eval.inference_distribution \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v10_stable/ep30.pt \
+    --videos_dir data/samples/Sakuga_test \
+    --output_dir runs/dsn_v10_stable/distribution_viz \
+    --budget_ratio 0.15 \
+    --Bmin 1 \
+    --Bmax 10
 """
