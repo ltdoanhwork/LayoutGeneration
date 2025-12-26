@@ -28,7 +28,7 @@ class BatchEvaluationPipeline:
                  sample_stride: int = 5,
                  resize_w: int = 320,
                  resize_h: int = 180,
-                 embedder: str = "resnet50",
+                 embedder: str = "clip_vitb32",  # Match V8/V9 training
                  scene_threshold: int = 27,
                  device: str = "cuda",
                  backend: str = "pyscenedetect",
@@ -39,6 +39,8 @@ class BatchEvaluationPipeline:
                  scene_device: str | None = None,
                  use_anime_attrs: int = 0,
                  anime_attrs_dim: int = 6,
+                 use_raft_motion: int = 0,
+                 motion_dim: int = 128,
                  min_scene_len: int = 0,
                  debug: bool = False):
         self.videos_dir = videos_dir
@@ -65,6 +67,8 @@ class BatchEvaluationPipeline:
         self.scene_device = scene_device
         self.use_anime_attrs = use_anime_attrs
         self.anime_attrs_dim = anime_attrs_dim
+        self.use_raft_motion = use_raft_motion
+        self.motion_dim = motion_dim
         self.min_scene_len = min_scene_len
         self.pipeline_out_dir = os.path.join(output_base_dir, "pipeline_results")
         self.eval_out_dir = os.path.join(output_base_dir, "eval_results")
@@ -96,6 +100,10 @@ class BatchEvaluationPipeline:
             "--resize_h", str(self.resize_h),
             "--embedder", self.embedder,
             "--backend", self.backend,
+            "--use_anime_attrs", str(self.use_anime_attrs),
+            "--anime_attrs_dim", str(self.anime_attrs_dim),
+            "--use_raft_motion", str(self.use_raft_motion),
+            "--motion_dim", str(self.motion_dim),
             "--min_scene_len", str(self.min_scene_len),
             ]
             if self.checkpoint:
@@ -373,10 +381,10 @@ class BatchEvaluationPipeline:
         if "distribution_metrics" in summary:
             d = summary["distribution_metrics"]
             tqdm.write(f"\n📈 Distribution Metrics (Test Set):")
-            tqdm.write(f"   Mean Percentile Rank: {d.get('mean_percentile_rank_mean', 0):.3f} ± {d.get('mean_percentile_rank_std', 0):.3f}")
-            tqdm.write(f"   Top-10% Coverage:     {d.get('top_10_coverage_mean', 0):.1%} ± {d.get('top_10_coverage_std', 0):.1%}")
-            tqdm.write(f"   Z-Score Improvement:  {d.get('zscore_improvement_mean', 0):.3f} ± {d.get('zscore_improvement_std', 0):.3f}")
-            tqdm.write(f"   Above P90 Ratio:      {d.get('above_p90_ratio_mean', 0):.1%}")
+            tqdm.write(f"   Mean Percentile Rank: {d.get('mean_percentile_rank_mean') or 0:.3f} ± {d.get('mean_percentile_rank_std') or 0:.3f}")
+            tqdm.write(f"   Top-10% Coverage:     {d.get('top_10_coverage_mean') or 0:.1%} ± {d.get('top_10_coverage_std') or 0:.1%}")
+            tqdm.write(f"   Z-Score Improvement:  {d.get('zscore_improvement_mean') or 0:.3f} ± {d.get('zscore_improvement_std') or 0:.3f}")
+            tqdm.write(f"   Above P90 Ratio:      {d.get('above_p90_ratio_mean') or 0:.1%}")
 
 def main():
     ps = argparse.ArgumentParser("Batch eval with DSN")
@@ -393,7 +401,7 @@ def main():
     ps.add_argument("--sample_stride", type=int, default=5)
     ps.add_argument("--resize_w", type=int, default=320)
     ps.add_argument("--resize_h", type=int, default=180)
-    ps.add_argument("--embedder", type=str, default="resnet50")
+    ps.add_argument("--embedder", type=str, default="clip_vitb32")  # Match V8/V9 training
     ps.add_argument("--scene_threshold", type=int, default=27)
     ps.add_argument("--eval_backbone", type=str, default="resnet50")
     ps.add_argument("--eval_device", type=str, default="cuda")
@@ -415,6 +423,8 @@ def main():
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
+    ps.add_argument("--use_raft_motion", type=int, default=0, help="Use RAFT motion features")
+    ps.add_argument("--motion_dim", type=int, default=128, help="Dimension of motion features")
     ps.add_argument("--min_scene_len", type=int, default=80, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
@@ -429,6 +439,7 @@ def main():
     backend=args.backend, threshold=args.threshold, model_dir=args.model_dir,
     weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device,
     use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim,
+    use_raft_motion=args.use_raft_motion, motion_dim=args.motion_dim,
     min_scene_len=args.min_scene_len
     )
 

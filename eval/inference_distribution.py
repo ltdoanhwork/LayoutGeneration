@@ -8,7 +8,7 @@ quality distribution of selected keyframes.
 
 This script provides:
 1. Load DSN checkpoint (V8 or other versions)
-2. Run keyframe selection on input video(s)
+2. Run keyframe selection on input video(s) WITH SCENE DETECTION
 3. Compute distribution-aware metrics
 4. Generate comprehensive visualizations
 
@@ -32,7 +32,7 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, NamedTuple
 from datetime import datetime
 import numpy as np
 import cv2
@@ -45,6 +45,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.rl.distribution_metrics import (
     DistributionAwareMetrics,
     compute_distribution_metrics_for_eval,
+    compute_per_scene_distribution_metrics,
     ATTR_NAMES,
 )
 from eval.visualize_distribution import (
@@ -54,6 +55,75 @@ from eval.visualize_distribution import (
     visualize_aggregate_distribution,
     HAS_MATPLOTLIB,
 )
+
+
+# ============================================================================
+# Scene Detection (aligned with run_dsn_pipeline.py)
+# ============================================================================
+
+class Scene(NamedTuple):
+    """Scene boundary with start and end frame indices."""
+    start_frame: int
+    end_frame: int
+
+
+def detect_scenes_simple(
+    video_path: str,
+    min_scene_len: int = 48,
+    threshold: float = 27.0,
+) -> List[Scene]:
+    """
+    Scene detection with multiple backends.
+    
+    Tries TransNetV2 first, then pyscenedetect, falls back to single scene.
+    
+    Args:
+        video_path: Path to video
+        min_scene_len: Minimum scene length in frames
+        threshold: Scene change threshold
+        
+    Returns:
+        List of Scene objects
+    """
+    # Try TransNetV2 via run_dsn_pipeline
+    try:
+        from eval.run_dsn_pipeline import detect_scenes_generic
+        scenes = detect_scenes_generic(video_path, "transnetv2", min_scene_len=min_scene_len)
+        if scenes:
+            return scenes
+    except Exception as e:
+        pass  # Fall through to next method
+    
+    # Try pyscenedetect (ContentDetector)
+    try:
+        from scenedetect import open_video, SceneManager
+        from scenedetect.detectors import ContentDetector
+        
+        video = open_video(video_path)
+        scene_manager = SceneManager()
+        scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+        scene_manager.detect_scenes(video)
+        scene_list = scene_manager.get_scene_list()
+        
+        if scene_list:
+            scenes = []
+            for scene in scene_list:
+                start_frame = scene[0].get_frames()
+                end_frame = scene[1].get_frames() - 1
+                if end_frame > start_frame:
+                    scenes.append(Scene(start_frame, end_frame))
+            if scenes:
+                return scenes
+    except Exception as e:
+        print(f"  ⚠️ pyscenedetect failed ({e})")
+    
+    # Fallback: single scene for entire video
+    print(f"  📍 Using single scene (scene detection unavailable)")
+    cap = cv2.VideoCapture(video_path)
+    n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    
+    return [Scene(0, max(0, n_frames - 1))]
 
 
 def load_checkpoint_and_model(
@@ -479,9 +549,11 @@ def process_video(
     budget_ratio: float = 0.06,
     Bmin: int = 3,
     Bmax: int = 15,
+    use_scene_detection: bool = True,  # NEW: use scene detection
+    min_scene_len: int = 48,           # NEW: minimum scene length
 ) -> Dict[str, Any]:
     """
-    Process a single video: extract features, run inference, compute metrics, visualize.
+    Process a single video: detect scenes, extract features per-scene, run inference, merge results.
     
     Args:
         video_path: Path to video file
@@ -492,6 +564,8 @@ def process_video(
         sample_stride: Frame sampling stride
         resize_w, resize_h: Resize dimensions
         budget_ratio, Bmin, Bmax: Budget settings
+        use_scene_detection: Whether to detect scenes (default True)
+        min_scene_len: Minimum scene length in frames
         
     Returns:
         Dict with metrics and paths
@@ -502,7 +576,7 @@ def process_video(
     
     print(f"\n📹 Processing: {video_id}")
     
-    # Open video
+    # Open video to get info
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"  ❌ Cannot open video: {video_path}")
@@ -510,62 +584,111 @@ def process_video(
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    
-    # Sample frames
-    frames = []
-    frame_indices = []
-    frame_idx = 0
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        if frame_idx % sample_stride == 0:
-            # Resize
-            frame = cv2.resize(frame, (resize_w, resize_h))
-            frames.append(frame)
-            frame_indices.append(frame_idx)
-        
-        frame_idx += 1
-    
     cap.release()
     
-    if len(frames) == 0:
-        print(f"  ❌ No frames extracted")
-        return {"error": "No frames"}
+    # Detect scenes
+    if use_scene_detection:
+        print(f"  🎬 Detecting scenes...")
+        scenes = detect_scenes_simple(video_path, min_scene_len=min_scene_len)
+        print(f"  📍 Found {len(scenes)} scene(s)")
+    else:
+        scenes = [Scene(0, total_frames - 1)]
+        print(f"  📍 Using single scene (no detection)")
     
-    print(f"  📊 Extracted {len(frames)} frames (stride={sample_stride})")
+    # Process each scene and collect results
+    all_frames = []
+    all_frame_indices = []
+    all_anime_attrs = []
+    all_features = []
+    all_sel_idx = []  # Local indices within scene
+    all_probs = []
+    scene_boundaries = []  # (start_idx, end_idx) in sampled frames
     
-    # Extract CLIP features
-    print(f"  🔮 Extracting CLIP features...")
-    features = extract_clip_features(frames, device)
-    
-    # Compute anime attributes (always computed for distribution analysis)
-    print(f"  🎨 Computing anime IQA attributes...")
-    anime_attrs = compute_anime_iqa_attributes(frames, device)
-    
-    # Compute motion features if needed by model config
-    motion_feats = None
     use_raft_motion = config.get("use_raft_motion", 0)
     motion_dim = config.get("motion_dim", 128)
     
-    if use_raft_motion:
-        print(f"  🎬 Computing motion features (dim={motion_dim})...")
-        motion_feats = compute_motion_features(frames, motion_dim)
+    global_frame_offset = 0
     
-    # Run inference
-    print(f"  🤖 Running model inference...")
-    sel_idx, probs = run_inference(
-        model, features, anime_attrs, motion_feats,
-        budget_ratio=budget_ratio, Bmin=Bmin, Bmax=Bmax, device=device
-    )
+    for scene_idx, scene in enumerate(scenes):
+        scene_start, scene_end = scene.start_frame, scene.end_frame
+        scene_len = scene_end - scene_start + 1
+        
+        # Sample frames from this scene
+        cap = cv2.VideoCapture(video_path)
+        scene_frames = []
+        scene_frame_indices = []
+        
+        for frame_idx in range(scene_start, scene_end + 1, sample_stride):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.resize(frame, (resize_w, resize_h))
+            scene_frames.append(frame)
+            scene_frame_indices.append(frame_idx)
+        
+        cap.release()
+        
+        if len(scene_frames) == 0:
+            continue
+        
+        # Extract features for this scene
+        scene_features = extract_clip_features(scene_frames, device)
+        scene_anime_attrs = compute_anime_iqa_attributes(scene_frames, device)
+        
+        # Compute motion features if needed
+        scene_motion = None
+        if use_raft_motion:
+            scene_motion = compute_motion_features(scene_frames, motion_dim)
+        
+        # Run inference for this scene
+        T_scene = len(scene_frames)
+        scene_budget = max(Bmin, min(Bmax, int(T_scene * budget_ratio)))
+        
+        scene_sel_idx, scene_probs = run_inference(
+            model, scene_features, scene_anime_attrs, scene_motion,
+            budget_ratio=budget_ratio, Bmin=Bmin, Bmax=Bmax, device=device
+        )
+        
+        # Record scene boundary in global sampled frame space
+        scene_start_global = len(all_frames)
+        scene_end_global = scene_start_global + len(scene_frames) - 1
+        scene_boundaries.append((scene_start_global, scene_end_global))
+        
+        # Convert local scene indices to global indices
+        for local_idx in scene_sel_idx:
+            all_sel_idx.append(local_idx + scene_start_global)
+        
+        # Accumulate
+        all_frames.extend(scene_frames)
+        all_frame_indices.extend(scene_frame_indices)
+        all_anime_attrs.append(scene_anime_attrs)
+        all_features.append(scene_features)
+        all_probs.append(scene_probs)
     
+    if len(all_frames) == 0:
+        print(f"  ❌ No frames extracted")
+        return {"error": "No frames"}
+    
+    # Concatenate all scene data
+    anime_attrs = np.concatenate(all_anime_attrs, axis=0)
+    probs = np.concatenate(all_probs, axis=0)
+    sel_idx = sorted(all_sel_idx)
+    
+    print(f"  📊 Extracted {len(all_frames)} frames from {len(scenes)} scene(s) (stride={sample_stride})")
     print(f"  ✅ Selected {len(sel_idx)} keyframes")
     
     # Compute distribution metrics
-    print(f"  📈 Computing distribution metrics...")
-    metrics = compute_distribution_metrics_for_eval(anime_attrs, sel_idx)
+    print(f"  📈 Computing distribution metrics (Global & Local)...")
+    global_metrics = compute_distribution_metrics_for_eval(anime_attrs, sel_idx)
+    
+    # NEW: Compute per-scene local metrics
+    local_metrics = compute_per_scene_distribution_metrics(
+        anime_attrs, sel_idx, scene_boundaries
+    )
+    
+    # Merge metrics
+    metrics = {**global_metrics, **local_metrics}
     
     # Get visualization data
     metrics_computer = DistributionAwareMetrics()
@@ -576,7 +699,9 @@ def process_video(
         "video_id": video_id,
         "video_path": str(video_path),
         "total_frames": total_frames,
-        "sampled_frames": len(frames),
+        "sampled_frames": len(all_frames),
+        "n_scenes": len(scenes),
+        "scene_boundaries": scene_boundaries,
         "sample_stride": sample_stride,
         "selected_frames": len(sel_idx),
         "frame_indices_selected": sel_idx,
@@ -622,17 +747,17 @@ def process_video(
         print(f"  ✅ Saved visualizations to {video_output_dir}")
     
     # Print key metrics
-    print(f"\n  📊 Key Metrics:")
-    print(f"     Mean Percentile Rank: {metrics['mean_percentile_rank']:.3f}")
-    print(f"     Z-Score Improvement:  {metrics['zscore_improvement']:.3f}")
-    print(f"     Top-10% Coverage:     {metrics['top_10_coverage']:.1%}")
-    print(f"     Above P90 Ratio:      {metrics['above_p90_ratio']:.1%}")
+    print(f"\n  📊 Key Metrics (GLOBAL vs LOCAL):")
+    print(f"     Mean Percentile Rank: Global={metrics['mean_percentile_rank']:.3f}, Local={metrics.get('local_mean_percentile_rank', 0):.3f}")
+    print(f"     Z-Score Improvement:  Global={metrics['zscore_improvement']:.3f}, Local={metrics.get('local_zscore_improvement', 0):.3f}")
+    print(f"     Top-10% Coverage:     Global={metrics['top_10_coverage']:.1%}, Local={metrics.get('local_top_10_coverage', 0):.1%}")
+    print(f"     Above P90 Ratio:      Global={metrics['above_p90_ratio']:.1%}, Local={metrics.get('local_above_p90_ratio', 0):.1%}")
     
     return {
         "video_id": video_id,
         "metrics": metrics,
         "n_selected": len(sel_idx),
-        "n_frames": len(frames),
+        "n_frames": len(all_frames),
         "output_dir": video_output_dir,
     }
 
@@ -662,6 +787,12 @@ def main():
     parser.add_argument("--Bmax", type=int, default=15)
     parser.add_argument("--max_videos", type=int, default=None,
                        help="Maximum number of videos to process")
+    
+    # Scene detection options (NEW)
+    parser.add_argument("--use_scene_detection", type=int, default=1,
+                       help="Use scene detection (1=yes, 0=no)")
+    parser.add_argument("--min_scene_len", type=int, default=48,
+                       help="Minimum scene length in frames")
     
     args = parser.parse_args()
     
@@ -697,6 +828,7 @@ def main():
     print(f"{'='*60}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Videos: {len(video_paths)}")
+    print(f"Scene Detection: {bool(args.use_scene_detection)}")
     print(f"Output: {args.output_dir}")
     print(f"{'='*60}")
     
@@ -707,7 +839,9 @@ def main():
             result = process_video(
                 video_path, model, config, args.output_dir, args.device,
                 args.sample_stride, args.resize_w, args.resize_h,
-                args.budget_ratio, args.Bmin, args.Bmax
+                args.budget_ratio, args.Bmin, args.Bmax,
+                use_scene_detection=bool(args.use_scene_detection),
+                min_scene_len=args.min_scene_len,
             )
             if "error" not in result:
                 results.append(result)
@@ -804,9 +938,41 @@ Usage:
 
     python -m eval.inference_distribution \
     --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v8_constrained/best_anime.pt \
-    --videos_dir data/samples/Sakuga \
+    --videos_dir data/samples/Sakuga_test \
     --output_dir runs/dsn_v8_constrained/distribution_viz \
     --budget_ratio 0.10 \
     --Bmin 5 \
     --Bmax 20
+
+    python -m eval.inference_distribution \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v7_dual_objective/dsn_v7_ep71.pt \
+    --videos_dir data/samples/Sakuga_test \
+    --output_dir runs/dsn_v7_dual_objective/distribution_viz \
+    --budget_ratio 0.10 \
+    --Bmin 5 \
+    --Bmax 20
+
+    python -m eval.inference_distribution \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_large_transnetv2/checkpoints/dsn_checkpoint_best.pt \
+    --videos_dir data/samples/Sakuga_test \
+    --output_dir runs/dsn_v5_large_transnetv2/distribution_viz \
+    --budget_ratio 0.10 \
+    --Bmin 5 \
+    --Bmax 20
+
+    python -m eval.inference_distribution \
+    --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v9_quality_focused/dsn_v9_ep2.pt \
+    --videos_dir data/samples/Sakuga_test \
+    --output_dir runs/dsn_v9_quality_focused/distribution_viz \
+    --budget_ratio 0.05 \
+    --Bmin 5 \
+    --Bmax 10
+
+    python -m eval.inference_distribution \
+        --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_anime_focus/checkpoints/dsn_checkpoint_best.pt \
+        --videos_dir data/samples/Sakuga_test \
+        --output_dir runs/dsn_v5_anime_focus/distribution_viz \
+        --budget_ratio 0.05 \
+        --Bmin 5 \ 
+        --Bmax 10
 """

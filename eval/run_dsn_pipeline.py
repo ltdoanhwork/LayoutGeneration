@@ -572,9 +572,10 @@ def main():
         if "model_state_dict" in ckpt:
             config_dict = ckpt["config"]
             
-            # V8 Detection
-            if config_dict.get("version") == "V8":
-                print("[run_dsn_pipeline] Detected V8 Constrained Multi-Task DSN model")
+            # V8/V9 Detection
+            valid_versions = ["V8", "V9"]
+            if config_dict.get("version") in valid_versions:
+                print(f"[run_dsn_pipeline] Detected {config_dict.get('version')} Constrained Multi-Task DSN model")
                 # Replicate training script feat_dim computation:
                 # feat_dim = base_feat_dim + anime_attrs_dim (if use_anime_attrs) + motion_dim (if use_raft_motion)
                 base_feat_dim = config_dict.get("feat_dim", 512)

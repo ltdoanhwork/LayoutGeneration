@@ -479,6 +479,61 @@ def compute_distribution_metrics_for_eval(
     return result.to_dict()
 
 
+def compute_per_scene_distribution_metrics(
+    attrs_all: np.ndarray,
+    sel_idx: List[int],
+    scene_boundaries: List[Tuple[int, int]],
+    attr_weights: Optional[Dict[str, float]] = None,
+) -> Dict[str, float]:
+    """
+    Compute metrics averaged across scenes.
+    
+    This evaluates how well the model picks frames relative to each scene's 
+    local distribution, which aligns with the per-scene training approach.
+    
+    Args:
+        attrs_all: (T, 6) all frame attributes
+        sel_idx: Global indices of selected frames
+        scene_boundaries: List of (start_idx, end_idx) in Global space
+        attr_weights: Optional attribute weights
+        
+    Returns:
+        Dict with averaged per-scene metrics
+    """
+    metrics_computer = DistributionAwareMetrics(attr_weights=attr_weights)
+    sel_set = set(sel_idx)
+    
+    scene_results = []
+    
+    for start, end in scene_boundaries:
+        if end <= start:
+            continue
+            
+        # Extract scene attributes
+        scene_attrs = attrs_all[start:end+1]
+        
+        # Get selected indices within this scene (and make them local)
+        scene_sel_local = [i - start for i in sel_idx if start <= i <= end]
+        
+        if len(scene_sel_local) == 0:
+            continue
+            
+        # Compute metrics for this scene
+        scene_res = metrics_computer.compute_all_metrics(scene_attrs, scene_sel_local, include_per_attr=False)
+        scene_results.append(scene_res.to_dict())
+        
+    if not scene_results:
+        return {}
+        
+    # Average across scenes
+    agg = {}
+    for key in scene_results[0].keys():
+        values = [r[key] for r in scene_results if key in r]
+        agg[f"local_{key}"] = float(np.mean(values))
+        
+    return agg
+
+
 if __name__ == "__main__":
     # Demo/test
     print("=== Distribution-Aware Metrics Demo ===\n")
