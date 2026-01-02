@@ -14,7 +14,7 @@ python3 -m src.pipeline.train_rl_dsn_v11 \
     --epochs 60 \
     --lr 5e-5 \
     --budget_ratio 0.10 \
-    --Bmin 3 \
+    --Bmin 2 \
     --Bmax 15 \
     --entropy_coef 0.01 \
     --clip_range 0.1 \

@@ -193,3 +193,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+    """
+    python -m eval.eval_on_scenes \
+        --checkpoint /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_plus/checkpoints/dsn_checkpoint_best.pt \
+        --dataset_dir /home/serverai/ltdoanh/LayoutGeneration/data/sakuga_test_precompute \
+        --output_dir /home/serverai/ltdoanh/LayoutGeneration/runs/dsn_v5_plus/scene_eval
+    """

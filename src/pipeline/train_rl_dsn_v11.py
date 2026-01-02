@@ -152,18 +152,14 @@ class PPOTrainerV11:
             _, values_rec = task_outputs["rec"]
             _, values_anime = task_outputs["anime"]
         
-        # 2. Sample action (DPP or greedy)
+        # 2. Sample action (use model probs, not DPP)
         feats_np = features.squeeze(0).cpu().numpy()[:, :512]  # Original CLIP feats
         
-        if self.use_dpp:
-            sel_idx, dpp_info = self.reward_system.select_with_dpp(feats_np, anime_attrs, budget)
-            old_log_prob = torch.log(merged_probs.squeeze(0)[sel_idx] + 1e-8).sum()
-        else:
-            probs_np = merged_probs.squeeze(0).cpu().numpy()
-            probs_safe = np.clip(probs_np, 1e-8, 1.0)
-            sel_idx = sorted(np.argsort(probs_safe)[-budget:].tolist())
-            old_log_prob = torch.log(merged_probs.squeeze(0)[sel_idx] + 1e-8).sum()
-            dpp_info = {}
+        # Always select based on model probabilities (like eval does)
+        probs_np = merged_probs.squeeze(0).cpu().numpy()
+        probs_safe = np.clip(probs_np, 1e-8, 1.0)
+        sel_idx = sorted(np.argsort(probs_safe)[-budget:].tolist())
+        old_log_prob = torch.log(merged_probs.squeeze(0)[sel_idx] + 1e-8).sum()
         
         old_log_prob = old_log_prob.detach()
         
@@ -359,11 +355,17 @@ def main():
             )
             
             feats_base = sample.feats
-            if sample.anime_attrs is None:
-                continue
             
-            # Concatenate features
-            feats_full = np.concatenate([feats_base, sample.anime_attrs], axis=1)
+            # Handle missing anime_attrs: use CLIP features norm as quality proxy
+            if sample.anime_attrs is not None:
+                anime_attrs = sample.anime_attrs
+                feats_full = np.concatenate([feats_base, anime_attrs], axis=1)
+            else:
+                # Create pseudo quality from CLIP feature norms
+                anime_attrs = np.linalg.norm(feats_base, axis=1, keepdims=True)
+                anime_attrs = np.tile(anime_attrs, (1, 6))  # (T, 6)
+                feats_full = feats_base  # Don't concatenate pseudo attrs
+            
             feats_t = torch.from_numpy(feats_full).float().unsqueeze(0)
             
             # Load rel_positions if available (V11)
@@ -374,7 +376,7 @@ def main():
             budget = max(args.Bmin, min(args.Bmax, int(len(feats_base) * args.budget_ratio)))
             
             # Train step
-            info = trainer.train_step(feats_t, sample.anime_attrs, rel_positions, budget, epoch)
+            info = trainer.train_step(feats_t, anime_attrs, rel_positions, budget, epoch)
             epoch_info.append(info)
             
             pbar.set_postfix({
@@ -384,6 +386,10 @@ def main():
             })
         
         # Epoch summary
+        if not epoch_info:
+            print(f"\nEpoch {epoch}: No scenes processed (check anime_attrs)")
+            continue
+            
         avg_info = {k: float(np.mean([x.get(k, 0) for x in epoch_info])) for k in epoch_info[0].keys()}
         
         # Log to tensorboard
