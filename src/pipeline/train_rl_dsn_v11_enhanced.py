@@ -135,7 +135,21 @@ class EnhancedTrainer:
         quality_reward = (mpr - 0.5) * 6.0  # Range: -3 to 3
         diversity_reward = (diversity_score - 0.5) * 2.0  # Range: -1 to 1
         
-        reward = quality_reward + self.diversity_weight * diversity_reward
+        # Ablation Logic
+        reward_mode = getattr(self, "reward_mode", "mpr_div")
+        optimize_rec = getattr(self, "optimize_rec", False)
+        
+        if reward_mode == "mpr_only":
+            final_reward = quality_reward
+        elif reward_mode == "div_only":
+            final_reward = diversity_reward * 2.0 # Scale up since it's small
+        else: # mpr_div
+            final_reward = quality_reward + self.diversity_weight * diversity_reward
+            
+        if optimize_rec:
+            # RecErr is negative error, usually substantial (e.g. -0.5 to -2.0)
+            # We add it with a weight. V6 used 1.0 or similar.
+            final_reward += rec_err * 2.0
         
         info = {
             "mpr": mpr,
@@ -144,10 +158,11 @@ class EnhancedTrainer:
             "quality_reward": quality_reward,
             "diversity_reward": diversity_reward,
             "RecErr": rec_err,
-            "Frechet": frechet
+            "Frechet": frechet,
+            "reward_mode": 0.0 # Just placeholder
         }
         
-        return reward, info
+        return final_reward, info
     
     def train_step(
         self,
@@ -235,6 +250,7 @@ def validate_epoch(
     budget_ratio: float = 0.15,
     Bmin: int = 3,
     Bmax: int = 15,
+    no_anime_attrs: bool = False,
 ) -> Dict[str, float]:
     """
     Run validation on test set, compute metrics, and save visualizations.
@@ -258,7 +274,11 @@ def validate_epoch(
                 continue
                 
             # Construct features
-            feats_full = np.concatenate([sample.feats, sample.anime_attrs], axis=1)
+            if no_anime_attrs:
+                feats_full = sample.feats
+            else:
+                feats_full = np.concatenate([sample.feats, sample.anime_attrs], axis=1)
+                
             feats_t = torch.from_numpy(feats_full).float().unsqueeze(0).to(device)
             T = len(sample.feats)
             budget = max(Bmin, min(Bmax, int(T * budget_ratio)))
@@ -330,7 +350,7 @@ def validate_epoch(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="V11 Enhanced Training")
+    parser = argparse.ArgumentParser(description="V11 Enhanced Training (with Ablation Support)")
     parser.add_argument("--dataset_root", type=str, required=True, help="Train data")
     parser.add_argument("--val_root", type=str, required=True, help="Test data (precomputed)")
     parser.add_argument("--save_dir", type=str, required=True)
@@ -344,6 +364,13 @@ def main():
     parser.add_argument("--entropy_coef", type=float, default=0.02)
     parser.add_argument("--clip_range", type=float, default=0.2)
     parser.add_argument("--diversity_weight", type=float, default=0.3)
+    
+    # Ablation Flags
+    parser.add_argument("--no_anime_attrs", action="store_true", help="Disable anime attributes input")
+    parser.add_argument("--reward_mode", type=str, default="mpr_div", choices=["mpr_div", "mpr_only", "div_only"], help="Reward composition mode")
+    parser.add_argument("--optimize_rec", action="store_true", help="Add RecErr to optimization reward")
+    parser.add_argument("--num_attn_layers", type=int, default=2, help="Number of transformer layers (0 to disable)")
+    parser.add_argument("--fixed_gating", action="store_true", help="Fix gating alpha to 0.5 (disable gating network)")
     
     args = parser.parse_args()
     set_seed(42)
@@ -362,13 +389,67 @@ def main():
     val_scene_dirs = build_epoch_index(args.val_root)
     print(f"Found {len(val_scene_dirs)} validation scenes in {args.val_root}")
     
-    # Check first scene to determine dim
-    sample = load_scene_dir(scene_dirs[0], load_frames=False, load_anime_attrs=True)
-    use_anime = sample.anime_attrs is not None
+    # Determine feature dime
+    use_anime = not args.no_anime_attrs
     full_feat_dim = args.feat_dim + (6 if use_anime else 0)
     print(f"Feature dim: {full_feat_dim} (Base {args.feat_dim} + Anime {6 if use_anime else 0})")
     
-    model = create_dsn_v8(feat_dim=full_feat_dim, use_pcgrad=False).to(args.device)
+    # Create Model
+    # Note: num_attn_layers is passed to DSNConfig implicitly via kwargs in create_dsn_v8 if supported 
+    # but create_dsn_v8 kwargs filtering might need check. 
+    # Actually create_dsn_v8 filters kwargs based on DSNConfig fields.
+    # DSNMultiTaskV8 config has num_attn_layers.
+    
+    # Handle Fixed Gating:
+    # If fixed_gating is True, we initiate with 0 layers or special init? 
+    # Actually simpler: we handle it in the Trainer or Model. 
+    # Since we can't easily change model code on the fly without patching,
+    # we'll pass a hack: gating_hidden_dim=0? No.
+    # We will modify DSNMultiTaskV8 on the fly or wrap it?
+    # Or better: The trainer can enforce it if the model supports it.
+    # Current DSNMultiTaskV8 doesn't support forcing alpha.
+    # WE NEED TO UPDATE DSNMultiTaskV8 to support it OR subclass it here.
+    
+    # Let's verify DSNConfig has num_attn_layers. Yes (based on prior knowledge/file view).
+    
+    model = create_dsn_v8(
+        feat_dim=full_feat_dim, 
+        use_pcgrad=False,
+        num_attn_layers=args.num_attn_layers,
+        # We'll handle fixed_gating by monkey-patching or handling in Trainer if possible,
+        # but cleaner to just let the gating net run and ignore it? No, that updates weights.
+        # We will patch the forward method of the instance if fixed_gating is True.
+    ).to(args.device)
+    
+    if args.fixed_gating:
+        print("🔒 Fixed Gating Enabled: Forcing alpha=0.5")
+        # Monkey patch forward to override alpha
+        original_forward = model.forward
+        def fixed_forward(x, motion_feats=None, return_gating=False, return_all_tasks=False):
+            if return_all_tasks:
+                return original_forward(x, motion_feats, return_gating, return_all_tasks)
+            
+            # Manually do the merge logic of V8
+            h = model.get_shared_hidden(x, motion_feats)
+            rec_logits, rec_values = model.rec_head(h)
+            anime_logits, anime_values = model.anime_head(h)
+            rec_probs = torch.softmax(rec_logits, dim=-1)
+            anime_probs = torch.softmax(anime_logits, dim=-1)
+            
+            # Forced Alpha
+            alpha = 0.5
+            merged_probs = alpha * rec_probs + (1 - alpha) * anime_probs
+            merged_values = alpha * rec_values + (1 - alpha) * anime_values
+            
+            if return_gating:
+                # Return constant alpha tensor
+                B, T = x.shape[:2]
+                return merged_probs, merged_values, torch.full((B, T), 0.5, device=x.device)
+            
+            return merged_probs, merged_values
+            
+        model.forward = fixed_forward
+
     trainer = EnhancedTrainer(
         model, lr=args.lr,
         entropy_coef=args.entropy_coef,
@@ -376,6 +457,9 @@ def main():
         device=args.device,
         diversity_weight=args.diversity_weight,
     )
+    # Inject ablation settings into trainer
+    trainer.reward_mode = args.reward_mode
+    trainer.optimize_rec = args.optimize_rec
     
     best_mpr = 0.0
     
@@ -389,8 +473,13 @@ def main():
             if sample.anime_attrs is None:
                 continue
             
-            feats_full = np.concatenate([sample.feats, sample.anime_attrs], axis=1)
-            feats_t = torch.from_numpy(feats_full).float().unsqueeze(0)
+            # Input Construction based on ablation
+            if args.no_anime_attrs:
+                feats_input = sample.feats # (T, 512)
+            else:
+                feats_input = np.concatenate([sample.feats, sample.anime_attrs], axis=1) # (T, 518)
+                
+            feats_t = torch.from_numpy(feats_input).float().unsqueeze(0)
             
             budget = max(args.Bmin, min(args.Bmax, int(len(sample.feats) * args.budget_ratio)))
             
@@ -417,7 +506,8 @@ def main():
         print(f"\nRunning Validation on {len(val_scene_dirs)} scenes...")
         val_metrics = validate_epoch(
             model, val_scene_dirs, args.device, epoch, args.save_dir,
-            budget_ratio=args.budget_ratio, Bmin=args.Bmin, Bmax=args.Bmax
+            budget_ratio=args.budget_ratio, Bmin=args.Bmin, Bmax=args.Bmax,
+            no_anime_attrs=args.no_anime_attrs
         )
         
         for k, v in val_metrics.items():
@@ -450,7 +540,6 @@ def main():
     
     writer.close()
     print(f"\n🎯 Training Complete! Best Val MPR: {best_mpr:.4f}")
-
 
 if __name__ == "__main__":
     main()

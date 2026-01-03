@@ -134,11 +134,54 @@ class SimplifiedTrainer:
         
         return reward, info
     
+    def compute_standard_reward(
+        self,
+        features_np: np.ndarray, # (T, 512)
+        sel_idx: List[int],
+    ) -> Tuple[float, Dict[str, float]]:
+        """
+        Standard reward: Representativeness + Diversity
+        R_rep = - || mean(selected) - mean(all) ||_2
+        """
+        T = len(features_np)
+        if len(sel_idx) == 0:
+            return 0.0, {"rep": -1.0, "diversity": 0.0}
+            
+        # 1. Representativeness (Reconstruction proxy)
+        # Goal: distribution of selected frames should match all frames
+        mean_all = np.mean(features_np, axis=0)
+        mean_sel = np.mean(features_np[sel_idx], axis=0)
+        dist = np.linalg.norm(mean_sel - mean_all)
+        rep_score = -float(dist) * 5.0 # Scale up for significance
+        
+        # 2. Diversity
+        if len(sel_idx) >= 2:
+            sorted_idx = sorted(sel_idx)
+            gaps = np.diff(sorted_idx)
+            expected_gap = T / (len(sel_idx) + 1)
+            min_gap = float(np.min(gaps))
+            diversity_score = min(1.0, min_gap / expected_gap)
+        else:
+            diversity_score = 0.0
+            
+        # Combined
+        reward = rep_score + self.diversity_weight * diversity_score
+        
+        info = {
+            "rep": rep_score,
+            "diversity": diversity_score,
+            "rep_reward": rep_score,
+            "diversity_reward": self.diversity_weight * diversity_score,
+        }
+        return reward, info
+
     def train_step(
         self,
         features: torch.Tensor,  # (1, T, D)
         anime_attrs: np.ndarray,
         budget: int,
+        mode: str = "anime", # "anime" or "standard"
+        features_np: Optional[np.ndarray] = None, # Required for "standard"
     ) -> Dict[str, float]:
         """Single training step."""
         self.model.train()
@@ -155,7 +198,13 @@ class SimplifiedTrainer:
         sel_idx = sorted(np.argsort(probs_np)[-budget:].tolist())
         
         # 3. Compute reward
-        reward, reward_info = self.compute_reward(anime_attrs, sel_idx)
+        if mode == "anime":
+            reward, reward_info = self.compute_reward(anime_attrs, sel_idx)
+        else:
+            if features_np is None:
+                raise ValueError("features_np is required for standard reward mode")
+            reward, reward_info = self.compute_standard_reward(features_np, sel_idx)
+            
         self.update_reward_stats(reward)
         norm_reward = self.normalize_reward(reward)
         
@@ -220,10 +269,16 @@ def main():
     parser.add_argument("--entropy_coef", type=float, default=0.02)
     parser.add_argument("--clip_range", type=float, default=0.2)
     parser.add_argument("--diversity_weight", type=float, default=0.3)
+    parser.add_argument("--track", type=str, default="C", choices=["A", "B", "C"],
+                       help="Ablation track: A=Feature-only, B=Reward-only, C=Combined")
     
     args = parser.parse_args()
     set_seed(42)
+    
+    # Update save dir to include track
+    args.save_dir = os.path.join(args.save_dir, f"track_{args.track.lower()}")
     os.makedirs(args.save_dir, exist_ok=True)
+    
     writer = SummaryWriter(os.path.join(args.save_dir, "logs"))
     
     # Save config
@@ -236,8 +291,18 @@ def main():
     # Check first scene
     sample = load_scene_dir(scene_dirs[0], load_frames=False, load_anime_attrs=True)
     use_anime = sample.anime_attrs is not None
-    full_feat_dim = args.feat_dim + (6 if use_anime else 0)
-    print(f"Feature dim: {full_feat_dim}")
+    
+    # Feature dimension depends on track
+    # Track A & C: Use anime attributes in input
+    # Track B: Standard features only
+    use_anime_inputs = args.track in ["A", "C"]
+    
+    if use_anime_inputs and use_anime:
+        full_feat_dim = args.feat_dim + 6
+        print(f"Track {args.track}: Using Anime Attributes in Input (Dim: {full_feat_dim})")
+    else:
+        full_feat_dim = args.feat_dim
+        print(f"Track {args.track}: Standard Features Only (Dim: {full_feat_dim})")
     
     model = create_dsn_v8(feat_dim=full_feat_dim, use_pcgrad=False).to(args.device)
     trainer = SimplifiedTrainer(
@@ -248,11 +313,11 @@ def main():
         diversity_weight=args.diversity_weight,
     )
     
-    best_mpr = 0.0
+    best_reward = -float("inf")
     
     for epoch in range(1, args.epochs + 1):
         epoch_info = []
-        pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}/{args.epochs}")
+        pbar = tqdm(scene_dirs, desc=f"Epoch {epoch}/{args.epochs} [Track {args.track}]")
         
         for scene_dir in pbar:
             sample = load_scene_dir(scene_dir, load_frames=False, load_anime_attrs=True)
@@ -260,17 +325,29 @@ def main():
             if sample.anime_attrs is None:
                 continue
             
-            feats_full = np.concatenate([sample.feats, sample.anime_attrs], axis=1)
+            # Prepare inputs based on track
+            if use_anime_inputs:
+                feats_full = np.concatenate([sample.feats, sample.anime_attrs], axis=1)
+            else:
+                feats_full = sample.feats
+                
             feats_t = torch.from_numpy(feats_full).float().unsqueeze(0)
             
             budget = max(args.Bmin, min(args.Bmax, int(len(sample.feats) * args.budget_ratio)))
             
-            info = trainer.train_step(feats_t, sample.anime_attrs, budget)
+            # Use appropriate reward function
+            # Track A: Standard Reward (Rep + Div), ignore anime_attrs for reward
+            # Track B & C: Anime Reward (Quality + Div)
+            if args.track == "A":
+                info = trainer.train_step(feats_t, sample.anime_attrs, budget, mode="standard", features_np=sample.feats)
+            else:
+                info = trainer.train_step(feats_t, sample.anime_attrs, budget, mode="anime")
+                
             epoch_info.append(info)
             
             pbar.set_postfix({
                 "loss": f"{info['loss']:.3f}",
-                "mpr": f"{info['mpr']:.3f}",
+                "rew": f"{info['norm_reward']:.2f}",
                 "div": f"{info['diversity']:.2f}"
             })
         
@@ -285,31 +362,31 @@ def main():
             if not math.isnan(v):
                 writer.add_scalar(f"train/{k}", v, epoch)
         
-        mpr = avg_info["mpr"]
-        print(f"\nEpoch {epoch}: Loss={avg_info['loss']:.4f}, MPR={mpr:.4f}, "
-              f"Top10={avg_info['top10']:.3f}, Div={avg_info['diversity']:.2f}")
+        avg_reward = avg_info["norm_reward"]
+        print(f"\nEpoch {epoch}: Loss={avg_info['loss']:.4f}, Rew={avg_reward:.4f}, "
+              f"Div={avg_info['diversity']:.2f}")
         
         # Save best
-        if mpr > best_mpr:
-            best_mpr = mpr
+        if avg_reward > best_reward:
+            best_reward = avg_reward
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "epoch": epoch,
-                "mpr": mpr,
+                "reward": avg_reward,
                 "config": vars(args)
             }, os.path.join(args.save_dir, "best.pt"))
-            print(f"  ✅ New best MPR: {mpr:.4f}")
+            print(f"  ✅ New best Reward: {avg_reward:.4f}")
         
         # Periodic checkpoint
         if epoch % 10 == 0 or epoch == args.epochs:
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "epoch": epoch,
-                "mpr": mpr,
+                "reward": avg_reward,
             }, os.path.join(args.save_dir, f"ep{epoch}.pt"))
     
     writer.close()
-    print(f"\n🎯 Training Complete! Best MPR: {best_mpr:.4f}")
+    print(f"\n🎯 Training Complete! Best Reward: {best_reward:.4f}")
 
 
 if __name__ == "__main__":

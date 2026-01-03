@@ -505,6 +505,54 @@ def create_comprehensive_dashboard(
     return fig
 
 
+def create_aggregate_radar_chart(
+    agg_per_attr: Dict[str, float],
+    save_path: Optional[str] = None,
+    title: str = "Aggregate Per-Attribute Percentiles",
+) -> Optional[plt.Figure]:
+    """
+    Create radar chart for aggregate attribute percentiles.
+    """
+    if not HAS_MATPLOTLIB:
+        return None
+    
+    attr_names = [name.capitalize() for name in ATTR_NAMES]
+    values = [agg_per_attr.get(f"percentile_{name}", 0.5) for name in ATTR_NAMES]
+    
+    # Close the chart
+    values = values + [values[0]]
+    angles = np.linspace(0, 2 * np.pi, len(attr_names), endpoint=False).tolist()
+    angles = angles + [angles[0]]
+    
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(polar=True))
+    
+    # Plot
+    ax.fill(angles, values, color='coral', alpha=0.25)
+    ax.plot(angles, values, color='coral', linewidth=2, label='Selected (Avg)')
+    
+    # Reference
+    ax.plot(angles, [0.5] * len(angles), color='gray', linestyle='--', label='Random')
+    
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(attr_names, fontsize=12)
+    ax.set_ylim(0, 1)
+    
+    for angle, val in zip(angles[:-1], values[:-1]):
+        ax.annotate(f'{val:.2f}', xy=(angle, val), fontsize=10, ha='center')
+        
+    ax.set_title(title, fontsize=16, fontweight='bold', pad=20)
+    ax.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        return None
+    
+    return fig
+
+
 def visualize_aggregate_distribution(
     results: List[Dict[str, Any]],
     output_dir: str,
@@ -537,10 +585,11 @@ def visualize_aggregate_distribution(
         above_p90_ratios.append(metrics.get("above_p90_ratio", 0))
     
     # Create multi-panel figure
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig = plt.figure(figsize=(16, 10))
+    gs = GridSpec(2, 3, figure=fig)
     
-    # 1. Mean percentile distribution
-    ax = axes[0, 0]
+    # 1. Mean percentile distribution (Top Left)
+    ax = fig.add_subplot(gs[0, 0])
     ax.hist(mean_percentiles, bins=20, color='steelblue', alpha=0.7, edgecolor='black')
     ax.axvline(0.5, color='gray', linestyle='--', label='Random (0.5)')
     ax.axvline(np.mean(mean_percentiles), color='coral', linestyle='-', linewidth=2,
@@ -551,8 +600,8 @@ def visualize_aggregate_distribution(
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 2. Top-10 coverage distribution
-    ax = axes[0, 1]
+    # 2. Top-10 coverage distribution (Top Center)
+    ax = fig.add_subplot(gs[0, 1])
     ax.hist(top_10_coverages, bins=20, color='coral', alpha=0.7, edgecolor='black')
     ax.axvline(np.mean(top_10_coverages), color='steelblue', linestyle='-', linewidth=2,
                label=f'Mean: {np.mean(top_10_coverages):.1%}')
@@ -562,8 +611,8 @@ def visualize_aggregate_distribution(
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 3. Z-score improvement distribution
-    ax = axes[1, 0]
+    # 3. Z-score improvement distribution (Top Right)
+    ax = fig.add_subplot(gs[0, 2])
     ax.hist(zscore_improvements, bins=20, color='green', alpha=0.7, edgecolor='black')
     ax.axvline(0, color='gray', linestyle='--', label='No improvement')
     ax.axvline(np.mean(zscore_improvements), color='coral', linestyle='-', linewidth=2,
@@ -574,8 +623,8 @@ def visualize_aggregate_distribution(
     ax.legend()
     ax.grid(True, alpha=0.3)
     
-    # 4. Scatter: Mean percentile vs Z-score
-    ax = axes[1, 1]
+    # 4. Scatter: Mean percentile vs Z-score (Bottom Left)
+    ax = fig.add_subplot(gs[1, 0])
     ax.scatter(mean_percentiles, zscore_improvements, alpha=0.6, edgecolor='black')
     ax.axhline(0, color='gray', linestyle='--', alpha=0.5)
     ax.axvline(0.5, color='gray', linestyle='--', alpha=0.5)
@@ -583,6 +632,40 @@ def visualize_aggregate_distribution(
     ax.set_ylabel('Z-Score Improvement')
     ax.set_title('Percentile vs Z-Score', fontweight='bold')
     ax.grid(True, alpha=0.3)
+
+    # 5. Aggregate Radar Chart (Bottom Center - spanning 2 cols)
+    # Calculate aggregate per-attribute percentiles
+    agg_per_attr = {}
+    for name in ATTR_NAMES:
+        key = f"percentile_{name}"
+        values = []
+        for r in results:
+            metrics = r.get("metrics", {})
+            if key in metrics:
+                values.append(metrics[key])
+        if values:
+            agg_per_attr[key] = float(np.mean(values))
+            
+    # Manually create polar axes at bottom right
+    ax = fig.add_subplot(gs[1, 1:], polar=True)
+    
+    attr_names = [name.capitalize() for name in ATTR_NAMES]
+    values = [agg_per_attr.get(f"percentile_{name}", 0.5) for name in ATTR_NAMES]
+    
+    # Close the chart
+    values = values + [values[0]]
+    angles = np.linspace(0, 2 * np.pi, len(attr_names), endpoint=False).tolist()
+    angles = angles + [angles[0]]
+    
+    # Plot Radar
+    ax.fill(angles, values, color='coral', alpha=0.25)
+    ax.plot(angles, values, color='coral', linewidth=2, label='Dataset Avg')
+    ax.plot(angles, [0.5] * len(angles), color='gray', linestyle='--', label='Random')
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(attr_names)
+    ax.set_title("Aggregate Per-Attribute Percentiles", fontweight='bold', pad=20)
+    ax.set_ylim(0, 1)
+
     
     fig.suptitle('Aggregate Distribution Analysis', fontsize=14, fontweight='bold')
     plt.tight_layout()
