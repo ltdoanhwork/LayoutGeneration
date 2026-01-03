@@ -134,10 +134,23 @@ class SimplifiedTrainer:
         
         return reward, info
     
+    def compute_mpr(self, anime_attrs: np.ndarray, sel_idx: List[int]) -> float:
+        """Helper to compute Mean Percentile Rank."""
+        T = len(anime_attrs)
+        if len(sel_idx) == 0:
+            return 0.0
+        
+        quality = anime_attrs.mean(axis=1)
+        ranks = np.argsort(np.argsort(quality))
+        percentiles = ranks / max(1, T - 1)
+        sel_percentiles = percentiles[sel_idx]
+        return float(np.mean(sel_percentiles))
+
     def compute_standard_reward(
         self,
         features_np: np.ndarray, # (T, 512)
         sel_idx: List[int],
+        anime_attrs: Optional[np.ndarray] = None, # Added for MPR calculation
     ) -> Tuple[float, Dict[str, float]]:
         """
         Standard reward: Representativeness + Diversity
@@ -145,7 +158,7 @@ class SimplifiedTrainer:
         """
         T = len(features_np)
         if len(sel_idx) == 0:
-            return 0.0, {"rep": -1.0, "diversity": 0.0}
+            return 0.0, {"rep": -1.0, "diversity": 0.0, "mpr": 0.0}
             
         # 1. Representativeness (Reconstruction proxy)
         # Goal: distribution of selected frames should match all frames
@@ -167,11 +180,17 @@ class SimplifiedTrainer:
         # Combined
         reward = rep_score + self.diversity_weight * diversity_score
         
+        # Compute MPR for monitoring (even if not used in reward)
+        mpr = 0.0
+        if anime_attrs is not None:
+            mpr = self.compute_mpr(anime_attrs, sel_idx)
+        
         info = {
             "rep": rep_score,
             "diversity": diversity_score,
             "rep_reward": rep_score,
             "diversity_reward": self.diversity_weight * diversity_score,
+            "mpr": mpr,
         }
         return reward, info
 
@@ -203,7 +222,7 @@ class SimplifiedTrainer:
         else:
             if features_np is None:
                 raise ValueError("features_np is required for standard reward mode")
-            reward, reward_info = self.compute_standard_reward(features_np, sel_idx)
+            reward, reward_info = self.compute_standard_reward(features_np, sel_idx, anime_attrs=anime_attrs)
             
         self.update_reward_stats(reward)
         norm_reward = self.normalize_reward(reward)
@@ -313,7 +332,8 @@ def main():
         diversity_weight=args.diversity_weight,
     )
     
-    best_reward = -float("inf")
+    # Track best model based on MPR (as per original script)
+    best_mpr = 0.0
     
     for epoch in range(1, args.epochs + 1):
         epoch_info = []
@@ -336,8 +356,6 @@ def main():
             budget = max(args.Bmin, min(args.Bmax, int(len(sample.feats) * args.budget_ratio)))
             
             # Use appropriate reward function
-            # Track A: Standard Reward (Rep + Div), ignore anime_attrs for reward
-            # Track B & C: Anime Reward (Quality + Div)
             if args.track == "A":
                 info = trainer.train_step(feats_t, sample.anime_attrs, budget, mode="standard", features_np=sample.feats)
             else:
@@ -347,7 +365,7 @@ def main():
             
             pbar.set_postfix({
                 "loss": f"{info['loss']:.3f}",
-                "rew": f"{info['norm_reward']:.2f}",
+                "mpr": f"{info['mpr']:.3f}",
                 "div": f"{info['diversity']:.2f}"
             })
         
@@ -362,31 +380,35 @@ def main():
             if not math.isnan(v):
                 writer.add_scalar(f"train/{k}", v, epoch)
         
+        mpr = avg_info.get("mpr", 0.0)
         avg_reward = avg_info["norm_reward"]
-        print(f"\nEpoch {epoch}: Loss={avg_info['loss']:.4f}, Rew={avg_reward:.4f}, "
+        
+        print(f"\nEpoch {epoch}: Loss={avg_info['loss']:.4f}, MPR={mpr:.4f}, Rew={avg_reward:.4f}, "
               f"Div={avg_info['diversity']:.2f}")
         
-        # Save best
-        if avg_reward > best_reward:
-            best_reward = avg_reward
+        # Save best based on MPR
+        if mpr > best_mpr:
+            best_mpr = mpr
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "epoch": epoch,
+                "mpr": mpr,
                 "reward": avg_reward,
                 "config": vars(args)
             }, os.path.join(args.save_dir, "best.pt"))
-            print(f"  ✅ New best Reward: {avg_reward:.4f}")
+            print(f"  ✅ New best MPR: {mpr:.4f}")
         
         # Periodic checkpoint
         if epoch % 10 == 0 or epoch == args.epochs:
             torch.save({
                 "model_state_dict": model.state_dict(),
                 "epoch": epoch,
+                "mpr": mpr,
                 "reward": avg_reward,
             }, os.path.join(args.save_dir, f"ep{epoch}.pt"))
     
     writer.close()
-    print(f"\n🎯 Training Complete! Best Reward: {best_reward:.4f}")
+    print(f"\n🎯 Training Complete! Best MPR: {best_mpr:.4f}")
 
 
 if __name__ == "__main__":
