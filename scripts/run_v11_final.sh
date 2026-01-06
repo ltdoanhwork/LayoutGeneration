@@ -30,6 +30,12 @@ echo "============================================================"
 
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 
+# Limit CPU threads to prevent high CPU usage
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+export NUMEXPR_NUM_THREADS=4
+export OPENBLAS_NUM_THREADS=4
+
 python -m src.pipeline.train_rl_dsn_v11_final \
     --dataset_root "$DATASET" \
     --val_root "$VAL_ROOT" \

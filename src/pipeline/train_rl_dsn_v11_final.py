@@ -141,6 +141,8 @@ class FinalTrainer:
         self.max_grad_norm = max_grad_norm
         self.device = device
         self.diversity_weight = diversity_weight
+        self.rec_weight = 0.0  # Will be set from args
+        self.frechet_weight = 0.0  # Will be set from args
         
         # Running statistics for reward normalization
         self.reward_mean = 0.0
@@ -208,7 +210,22 @@ class FinalTrainer:
         # Combined reward
         quality_reward = (mpr - 0.5) * 6.0
         diversity_reward = (diversity_score - 0.5) * 2.0
+        
+        # Base reward: Quality + Diversity
         final_reward = quality_reward + self.diversity_weight * diversity_reward
+        
+        # Add RecErr to reward (negative because lower is better)
+        if self.rec_weight > 0:
+            # rec_err is positive error, we want to minimize it
+            rec_reward = -rec_err * self.rec_weight
+            final_reward += rec_reward
+        
+        # Add Frechet to reward (negative because lower is better)
+        if self.frechet_weight > 0:
+            # Frechet can be large, normalize and clip
+            frechet_norm = min(frechet, 1.0)  # Clip to reasonable range
+            frechet_reward = -frechet_norm * self.frechet_weight
+            final_reward += frechet_reward
         
         info = {
             "mpr": mpr,
@@ -303,11 +320,11 @@ def validate_epoch(
     Bmin: int = 3,
     Bmax: int = 15,
     no_anime_attrs: bool = False,
-    compute_lpips: bool = True,
-    lpips_device: str = "cuda",
+    total_epochs: int = 60,
 ) -> Dict[str, float]:
     """
     Comprehensive validation with all 6 metrics + per-attribute breakdown.
+    LPIPS_Div is computed only in last 10 epochs for efficiency.
     """
     model.eval()
     
@@ -320,6 +337,18 @@ def validate_epoch(
     
     # For aggregate per-attribute percentiles
     all_per_attr = {name: [] for name in ATTR_NAMES}
+    
+    # LPIPS: only compute in last 10 epochs for efficiency
+    compute_lpips = (epoch > total_epochs - 10)
+    lpips_metric = None
+    if compute_lpips:
+        try:
+            from src.distance_selector.registry import create_metric
+            print(f"  [LPIPS] Loading LPIPS metric for epoch {epoch}...")
+            lpips_metric = create_metric("lpips", net="alex", device=device)
+        except Exception as e:
+            print(f"  [LPIPS] Failed to load: {e}")
+            lpips_metric = None
     
     for scene_dir in tqdm(val_scene_dirs, desc=f"Validating Ep{epoch}"):
         try:
@@ -371,8 +400,24 @@ def validate_epoch(
             if np.isnan(temp_cov):
                 temp_cov = 0.0
             
-            # 6. LPIPS Diversity - skip for speed during training (computed on subset)
-            lpips_div = 0.0  # Will be computed on-demand
+            # 6. LPIPS Diversity (higher is better) - computed in last 10 epochs
+            lpips_div = 0.0
+            if lpips_metric is not None and len(sel_idx) >= 2:
+                try:
+                    # Need to load frames for LPIPS
+                    sample_with_frames = load_scene_dir(scene_dir, load_frames=True, load_anime_attrs=False)
+                    if sample_with_frames.frames and len(sample_with_frames.frames) > 0:
+                        key_frames = [sample_with_frames.frames[i] for i in sel_idx if i < len(sample_with_frames.frames)]
+                        if len(key_frames) >= 2:
+                            Ts = [lpips_metric.preprocess_bgr(f) for f in key_frames]
+                            dists = []
+                            for i in range(len(Ts)):
+                                for j in range(i+1, len(Ts)):
+                                    dists.append(lpips_metric.pair_distance(Ts[i], Ts[j]))
+                            if dists:
+                                lpips_div = float(np.mean(dists))
+                except Exception as e:
+                    pass  # Skip LPIPS on error
             
             # Per-attribute percentiles
             per_attr = metrics_computer.compute_per_attribute_percentile(sample.anime_attrs, sel_idx)
@@ -449,8 +494,12 @@ def main():
     parser.add_argument("--entropy_coef", type=float, default=0.02)
     parser.add_argument("--clip_range", type=float, default=0.2)
     parser.add_argument("--diversity_weight", type=float, default=0.3)
+    parser.add_argument("--rec_weight", type=float, default=0.0, help="Weight for RecErr optimization (0=off)")
+    parser.add_argument("--frechet_weight", type=float, default=0.0, help="Weight for Frechet optimization (0=off)")
     parser.add_argument("--no_anime_attrs", action="store_true", help="Disable anime attributes input")
     parser.add_argument("--num_attn_layers", type=int, default=2)
+    parser.add_argument("--gating_hidden", type=int, default=64, help="Gating network hidden dim")
+    parser.add_argument("--lstm_hidden", type=int, default=128, help="LSTM hidden size")
     
     args = parser.parse_args()
     set_seed(42)
@@ -477,6 +526,8 @@ def main():
         feat_dim=full_feat_dim, 
         use_pcgrad=False,
         num_attn_layers=args.num_attn_layers,
+        gating_hidden=args.gating_hidden,
+        lstm_hidden=args.lstm_hidden,
     ).to(args.device)
     
     trainer = FinalTrainer(
@@ -486,6 +537,8 @@ def main():
         device=args.device,
         diversity_weight=args.diversity_weight,
     )
+    trainer.rec_weight = args.rec_weight
+    trainer.frechet_weight = args.frechet_weight
     
     best_score = -float('inf')
     
@@ -530,7 +583,7 @@ def main():
         val_metrics = validate_epoch(
             model, val_scene_dirs, args.device, epoch, args.save_dir,
             budget_ratio=args.budget_ratio, Bmin=args.Bmin, Bmax=args.Bmax,
-            no_anime_attrs=args.no_anime_attrs
+            no_anime_attrs=args.no_anime_attrs, total_epochs=args.epochs
         )
         
         # Log all validation metrics to TensorBoard
