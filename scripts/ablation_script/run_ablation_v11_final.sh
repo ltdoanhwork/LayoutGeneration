@@ -14,8 +14,8 @@
 # ============================================================
 
 GPU_ID=${1:-0}
-DATASET="data/sakuga_dataset_v11"
-VAL_ROOT="data/sakuga_test_precompute"
+DATASET="data/sakuga_dataset_v11_new"
+VAL_ROOT="data/sakuga_dataset_v11_new_test"
 OUT_ROOT="runs/ablation_v11_final"
 EPOCHS=50
 

@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Union, Tuple
 import torch
 import numpy as np
 from pathlib import Path
+import cv2
 
 try:
     from torchmetrics.multimodal import CLIPImageQualityAssessment
@@ -75,28 +76,28 @@ class AnimeClipIQA:
     def __init__(
         self,
         device: str = "cuda",
-        model_name: str = "openai/clip-vit-base-patch32",
+        model_name: str = "ViT-B/32", # Default to OpenAI CLIP name
         prompt_groups: Optional[List[str]] = None,
         data_range: float = 255.0,
     ):
         """
-        Initialize Anime CLIP-IQA module.
+        Initialize Anime CLIP-IQA module using OpenAI CLIP directly.
         
         Args:
             device: Device to run inference on ('cuda' or 'cpu')
-            model_name: CLIP model variant to use
+            model_name: CLIP model variant to use (e.g. "ViT-B/32")
             prompt_groups: List of prompt keys to use. If None, uses default set.
             data_range: Maximum value of input images (255 for uint8, 1.0 for float)
         """
-        if not TORCHMETRICS_AVAILABLE:
-            raise ImportError(
-                "torchmetrics with multimodal support required. "
-                "Install with: pip install torchmetrics[multimodal]"
-            )
+        import clip
         
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.model_name = model_name
         self.data_range = data_range
+        
+        print(f"[AnimeClipIQA] Loading OpenAI CLIP: {model_name} on {device}...")
+        self.model, self.preprocess = clip.load(model_name, device=self.device, jit=False)
+        self.model.eval()
         
         # Default prompt groups: focus on key anime quality aspects
         if prompt_groups is None:
@@ -106,17 +107,24 @@ class AnimeClipIQA:
             ]
         
         self.prompt_groups = prompt_groups
+        self.prompts_dict = {key: ANIME_PROMPTS[key] for key in prompt_groups}
         
-        # Build prompt tuple for torchmetrics
-        self.prompts = tuple(ANIME_PROMPTS[key] for key in prompt_groups)
+        # Precompute text embeddings
+        # prompts_dict is {key: (pos_text, neg_text)}
+        # We process each key: compute embedding for [pos, neg]
+        self.text_embeds = {}
         
-        # Initialize CLIP-IQA metric
-        self.metric = CLIPImageQualityAssessment(
-            model_name_or_path=model_name,
-            data_range=data_range,
-            prompts=self.prompts
-        ).to(self.device)
-        
+        print("[AnimeClipIQA] Precomputing text embeddings...")
+        with torch.no_grad():
+            for key, (pos_text, neg_text) in self.prompts_dict.items():
+                # Tokenize: [pos, neg]
+                text_tokens = clip.tokenize([pos_text, neg_text]).to(self.device)
+                # Encode
+                text_features = self.model.encode_text(text_tokens) # (2, D)
+                # Normalize
+                text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+                self.text_embeds[key] = text_features
+                
         print(f"[AnimeClipIQA] Initialized with model: {model_name}")
         print(f"[AnimeClipIQA] Using {len(self.prompt_groups)} prompt groups: {prompt_groups}")
     
@@ -125,47 +133,74 @@ class AnimeClipIQA:
         images: Union[np.ndarray, torch.Tensor, List[np.ndarray]]
     ) -> torch.Tensor:
         """
-        Preprocess images to the format expected by CLIP-IQA.
+        Preprocess images using CLIP's preprocessor.
         
         Args:
             images: Images in one of the following formats:
                 - np.ndarray: (H, W, 3) BGR uint8 or (N, H, W, 3) batch
-                - torch.Tensor: (C, H, W) or (N, C, H, W)
+                - torch.Tensor: (C, H, W) or (N, C, H, W) float/byte
                 - List[np.ndarray]: List of (H, W, 3) BGR images
         
         Returns:
-            torch.Tensor: (N, 3, H, W) float tensor in range [0, data_range]
+            torch.Tensor: (N, 3, 224, 224) preprocessed batch on device
         """
+        from PIL import Image
+        
+        # Standardize to List[PIL.Image]
+        pil_images = []
+        
         if isinstance(images, list):
-            # Convert list of numpy arrays to batch
-            images = np.stack(images, axis=0)
-        
-        if isinstance(images, np.ndarray):
-            # Handle BGR to RGB conversion
-            if images.ndim == 3:  # Single image (H, W, 3)
-                images = images[np.newaxis, ...]  # Add batch dimension
-            
-            # Convert BGR to RGB
-            images = images[..., ::-1].copy()  # BGR -> RGB
-            
-            # Convert to tensor and transpose to (N, C, H, W)
-            images = torch.from_numpy(images).permute(0, 3, 1, 2).float()
-        
+            # List of numpy arrays
+            for img in images:
+                if isinstance(img, np.ndarray):
+                    # BGR -> RGB
+                    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.shape[-1] == 3 else img
+                    pil_images.append(Image.fromarray(img_rgb))
+                elif isinstance(img, torch.Tensor):
+                    # Tensor to PIL
+                    pil_images.append(self._tensor_to_pil(img))
+                    
+        elif isinstance(images, np.ndarray):
+            if images.ndim == 3:
+                images = images[np.newaxis, ...]
+            for i in range(images.shape[0]):
+                img = images[i]
+                # BGR -> RGB
+                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB) if img.shape[-1] == 3 else img
+                pil_images.append(Image.fromarray(img_rgb))
+                
         elif isinstance(images, torch.Tensor):
-            if images.ndim == 3:  # Single image (C, H, W)
-                images = images.unsqueeze(0)  # Add batch dimension
-        
+            if images.ndim == 3:
+                images = images.unsqueeze(0)
+            for i in range(images.shape[0]):
+                pil_images.append(self._tensor_to_pil(images[i]))
+                
         else:
             raise TypeError(f"Unsupported image type: {type(images)}")
         
-        # Move to device
-        images = images.to(self.device)
+        # Apply CLIP preprocess
+        # preprocess returns a tensor (3, 224, 224)
+        processed = [self.preprocess(img) for img in pil_images]
+        batch = torch.stack(processed).to(self.device)
         
-        # Ensure values are in [0, data_range]
-        if images.max() <= 1.0 and self.data_range == 255.0:
-            images = images * 255.0
-        
-        return images
+        return batch
+
+    def _tensor_to_pil(self, tensor: torch.Tensor):
+        from PIL import Image
+        # Expects (C, H, W)
+        if tensor.ndim == 3:
+            # If float in [0, 1] or [0, 255]
+            arr = tensor.cpu().numpy()
+            if arr.shape[0] == 3:
+                arr = arr.transpose(1, 2, 0) # CHW -> HWC
+            
+            # Normalize to [0, 255] uint8
+            if self.data_range == 1.0 and arr.max() <= 1.0:
+                 arr = (arr * 255.0).astype(np.uint8)
+            else:
+                 arr = arr.astype(np.uint8)
+            return Image.fromarray(arr)
+        return None
     
     def compute_batch_scores(
         self, 
@@ -175,26 +210,37 @@ class AnimeClipIQA:
         Compute quality scores for a batch of images.
         
         Args:
-            images: Batch of images (see preprocess_images for formats)
+            images: Batch of images
         
         Returns:
             Dict mapping prompt group names to numpy arrays of scores (N,)
         """
-        images_tensor = self.preprocess_images(images)
+        images_tensor = self.preprocess_images(images) # (N, 3, 224, 224)
         
         with torch.no_grad():
-            scores_dict = self.metric(images_tensor)
-        
-        # Convert to numpy and map back to prompt group names
-        result = {}
-        for idx, key in enumerate(self.prompt_groups):
-            user_key = f"user_defined_{idx}"
-            if user_key in scores_dict:
-                result[key] = scores_dict[user_key].cpu().numpy()
-            elif key in scores_dict:
-                result[key] = scores_dict[key].cpu().numpy()
-        
-        return result
+            # Encode images
+            image_features = self.model.encode_image(images_tensor) # (N, D)
+            image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+            
+            # Compute scores for each prompt pair
+            results = {}
+            logit_scale = self.model.logit_scale.exp()
+            
+            for key, text_features in self.text_embeds.items():
+                # text_features: (2, D) -> [pos, neg]
+                
+                # Similarity: (N, D) @ (D, 2) -> (N, 2)
+                logits = logit_scale * image_features @ text_features.t()
+                
+                # Softmax to get probabilities
+                probs = logits.softmax(dim=-1) # (N, 2)
+                
+                # Probability of "positive" class (index 0)
+                pos_probs = probs[:, 0].cpu().numpy()
+                
+                results[key] = pos_probs
+                
+        return results
     
     def compute_frame_scores(
         self, 
@@ -272,7 +318,7 @@ class AnimeClipIQA:
 
 def create_anime_clipiqa(
     device: str = "cuda",
-    model_name: str = "openai/clip-vit-base-patch32",
+    model_name: str = "ViT-B/32",
     **kwargs
 ) -> AnimeClipIQA:
     """

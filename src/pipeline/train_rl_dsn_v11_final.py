@@ -625,6 +625,20 @@ def main():
                 "config": vars(args)
             }, os.path.join(args.save_dir, "best.pt"))
             print(f"  ✅ New Best! Composite Score: {composite:.4f}")
+            
+            # Save "best.pt" (latest best)
+            checkpoint_data = {
+                "model_state_dict": model.state_dict(),
+                "epoch": epoch,
+                "composite_score": composite,
+                "metrics": val_metrics,
+                "config": vars(args)
+            }
+            torch.save(checkpoint_data, os.path.join(args.save_dir, "best.pt"))
+            
+            # Keep history of best models
+            best_model_name = f"best_epoch_{epoch}_score_{composite:.4f}.pt"
+            torch.save(checkpoint_data, os.path.join(args.save_dir, best_model_name))
         
         # Periodic checkpoint
         torch.save({

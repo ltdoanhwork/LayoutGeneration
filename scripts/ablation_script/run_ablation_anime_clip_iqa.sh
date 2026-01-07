@@ -14,8 +14,8 @@
 # ============================================================================
 
 GPU_ID=${1:-0}
-DATA_ROOT="data/sakuga_dataset_100_samples"
-VAL_ROOT="data/sakuga_test_precompute"
+DATA_ROOT="data/sakuga_dataset_v11_new"
+VAL_ROOT="data/sakuga_dataset_v11_new_test"
 SAVE_ROOT="runs/ablation_anime_iqa"
 EPOCHS=50
 

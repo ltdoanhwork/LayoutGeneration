@@ -25,6 +25,7 @@ except ImportError:
     cv2 = None
 
 from src.scene_detection import create_detector, available_detectors, Scene
+from src.models.anime_clipiqa_v3 import create_anime_clipiqa
 from utils.io import save_json, save_csv, frames_to_timecode, export_scene_previews
 
 
@@ -159,6 +160,7 @@ def save_scene_v11(
     frames: List[np.ndarray],
     feats: np.ndarray,
     rel_positions: np.ndarray,  # V11: relative positions
+    anime_attrs: np.ndarray,    # V11: Anime-CLIP-IQA scores
     meta: Dict[str, Any],
     jpeg_quality: int = 85
 ):
@@ -178,6 +180,9 @@ def save_scene_v11(
     
     # V11: Save relative positions
     np.save(scene_dir / "rel_positions.npy", rel_positions)
+
+    # V11: Save Anime-CLIP-IQA attributes
+    np.save(scene_dir / "anime_attrs.npy", anime_attrs)
     
     # Save meta
     meta["version"] = "v11"
@@ -216,6 +221,10 @@ def main():
         resize_to = (args.resize_w, args.resize_h)
     
     extractor = CLIPExtractor(device=args.device)
+    
+    # Initialize Anime-CLIP-IQA model
+    log("Initializing Anime-CLIP-IQA (Standard/V3)...")
+    iqa_model = create_anime_clipiqa(device=args.device)
     
     det_kwargs = {
         "model_dir": args.model_dir,
@@ -299,6 +308,10 @@ def main():
                 (fidx - s) / max(1, e - s)
                 for fidx in frame_indices
             ], dtype=np.float32)
+
+            # V11: Compute Anime-CLIP-IQA scores
+            # Use legacy format (N, 6) for compatibility with training
+            anime_attrs = iqa_model.get_legacy_format_scores(frames)
             
             meta = {
                 "video": str(video_path),
@@ -315,7 +328,7 @@ def main():
             }
             
             save_scene_v11(
-                out_root, video_stem, sid, frames, feats, rel_positions, meta,
+                out_root, video_stem, sid, frames, feats, rel_positions, anime_attrs, meta,
                 jpeg_quality=args.jpeg_quality
             )
             
@@ -339,4 +352,8 @@ python -m scripts.prepare_rl_dataset_v11 \
     --min_scene_len 30 \
     --max_scene_len 500 \
     --device cuda
+
+python -m scripts.precompute_script.prepare_rl_dataset_v11 --video_dir data/samples/Sakuga --out_dir data/sakuga_dataset_v11_new --backend transnetv2 --model_dir src/models/TransNetV2 --min_scene_len 30 --max_scene_len 500 --device cuda
+
+python -m scripts.precompute_script.prepare_rl_dataset_v11 --video_dir data/samples/Sakuga_test --out_dir data/sakuga_dataset_v11_new_test --backend transnetv2 --model_dir src/models/TransNetV2 --min_scene_len 30 --max_scene_len 500 --device cuda
 """

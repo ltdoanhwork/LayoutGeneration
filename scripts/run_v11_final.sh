@@ -13,9 +13,9 @@
 # ============================================================
 
 GPU_ID=${1:-0}
-DATASET="data/sakuga_dataset_v11"
+DATASET="data/sakuga_dataset_v11_new"
 VAL_ROOT="data/sakuga_test_precompute"
-SAVE_DIR="runs/training_v11_final"
+SAVE_DIR="runs/training_v11_final_new"
 EPOCHS=60
 
 echo "============================================================"
