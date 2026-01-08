@@ -450,3 +450,6 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 ## 📞 Contact & Support
 
 For issues, questions, or suggestions, please open an issue on GitHub.
+
+
+ python -m scripts.precompute_script.prepare_rl_dataset_v11 --video_dir data/samples/Sakuga --out_dir data/sakuga_dataset_v11_new --backend transnetv2 --model_dir src/models/TransNetV2 --min_scene_len 30 --max_scene_len 500 --device cuda
