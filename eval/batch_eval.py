@@ -28,7 +28,7 @@ class BatchEvaluationPipeline:
                  sample_stride: int = 5,
                  resize_w: int = 320,
                  resize_h: int = 180,
-                 embedder: str = "resnet50",
+                 embedder: str = "clip_vitb32",  # Match V8/V9 training
                  scene_threshold: int = 27,
                  device: str = "cuda",
                  backend: str = "pyscenedetect",
@@ -39,6 +39,8 @@ class BatchEvaluationPipeline:
                  scene_device: str | None = None,
                  use_anime_attrs: int = 0,
                  anime_attrs_dim: int = 6,
+                 use_raft_motion: int = 0,
+                 motion_dim: int = 128,
                  min_scene_len: int = 0,
                  debug: bool = False):
         self.videos_dir = videos_dir
@@ -65,6 +67,8 @@ class BatchEvaluationPipeline:
         self.scene_device = scene_device
         self.use_anime_attrs = use_anime_attrs
         self.anime_attrs_dim = anime_attrs_dim
+        self.use_raft_motion = use_raft_motion
+        self.motion_dim = motion_dim
         self.min_scene_len = min_scene_len
         self.pipeline_out_dir = os.path.join(output_base_dir, "pipeline_results")
         self.eval_out_dir = os.path.join(output_base_dir, "eval_results")
@@ -96,6 +100,10 @@ class BatchEvaluationPipeline:
             "--resize_h", str(self.resize_h),
             "--embedder", self.embedder,
             "--backend", self.backend,
+            "--use_anime_attrs", str(self.use_anime_attrs),
+            "--anime_attrs_dim", str(self.anime_attrs_dim),
+            "--use_raft_motion", str(self.use_raft_motion),
+            "--motion_dim", str(self.motion_dim),
             "--min_scene_len", str(self.min_scene_len),
             ]
             if self.checkpoint:
@@ -227,6 +235,19 @@ class BatchEvaluationPipeline:
                 "timestamp": datetime.now().isoformat()
             }
             
+            # 4) Load distribution metrics if available
+            dist_json = os.path.join(extraction["output_dir"], "distribution.json")
+            if os.path.exists(dist_json):
+                try:
+                    with open(dist_json, "r", encoding="utf-8") as f:
+                        dist_data = json.load(f)
+                    dist_metrics = dist_data.get("metrics", {})
+                    self.results[video_id]["distribution_metrics"] = dist_metrics
+                    tqdm.write(f"  📊 Distribution: mean_percentile={dist_metrics.get('mean_percentile_rank', 0):.3f}, "
+                              f"top10_cov={dist_metrics.get('top_10_coverage', 0):.1%}")
+                except Exception as e:
+                    if self.debug: print(f"  [Warning] Failed to load distribution metrics: {e}")
+            
             # Extract metrics for logging (handle nesting if with_baselines=True)
             std_m = metrics.get("method", metrics)
             tqdm.write(f"  📊 RecErr: {std_m.get('RecErr', 'N/A')} "
@@ -321,9 +342,49 @@ class BatchEvaluationPipeline:
             summary["anime_quality_metrics"]["Top10_Precision_mean"] = safe_mean(top_k_precisions)
             summary["anime_quality_metrics"]["Quality_Improvement_mean"] = safe_mean(quality_improvements)
             
+            # NEW: Distribution-aware metrics aggregation
+            dist_percentiles = []
+            dist_top10_coverages = []
+            dist_top25_coverages = []
+            dist_zscores = []
+            dist_above_p90 = []
+            dist_above_median = []
+            
+            for vid, r in self.results.items():
+                d = r.get("distribution_metrics", {})
+                if d:
+                    dist_percentiles.append(d.get("mean_percentile_rank"))
+                    dist_top10_coverages.append(d.get("top_10_coverage"))
+                    dist_top25_coverages.append(d.get("top_25_coverage"))
+                    dist_zscores.append(d.get("zscore_improvement"))
+                    dist_above_p90.append(d.get("above_p90_ratio"))
+                    dist_above_median.append(d.get("above_median_ratio"))
+            
+            if any(dist_percentiles):
+                summary["distribution_metrics"] = {
+                    "mean_percentile_rank_mean": safe_mean(dist_percentiles),
+                    "mean_percentile_rank_std": safe_std(dist_percentiles),
+                    "top_10_coverage_mean": safe_mean(dist_top10_coverages),
+                    "top_10_coverage_std": safe_std(dist_top10_coverages),
+                    "top_25_coverage_mean": safe_mean(dist_top25_coverages),
+                    "zscore_improvement_mean": safe_mean(dist_zscores),
+                    "zscore_improvement_std": safe_std(dist_zscores),
+                    "above_p90_ratio_mean": safe_mean(dist_above_p90),
+                    "above_median_ratio_mean": safe_mean(dist_above_median),
+                }
+            
         outp = os.path.join(self.output_base_dir, "summary_results.json")
         with open(outp, "w", encoding="utf-8") as f: json.dump(summary, f, indent=2, ensure_ascii=False)
         tqdm.write(f"\n📊 Summary saved to: {outp}")
+        
+        # Print distribution summary if available
+        if "distribution_metrics" in summary:
+            d = summary["distribution_metrics"]
+            tqdm.write(f"\n📈 Distribution Metrics (Test Set):")
+            tqdm.write(f"   Mean Percentile Rank: {d.get('mean_percentile_rank_mean') or 0:.3f} ± {d.get('mean_percentile_rank_std') or 0:.3f}")
+            tqdm.write(f"   Top-10% Coverage:     {d.get('top_10_coverage_mean') or 0:.1%} ± {d.get('top_10_coverage_std') or 0:.1%}")
+            tqdm.write(f"   Z-Score Improvement:  {d.get('zscore_improvement_mean') or 0:.3f} ± {d.get('zscore_improvement_std') or 0:.3f}")
+            tqdm.write(f"   Above P90 Ratio:      {d.get('above_p90_ratio_mean') or 0:.1%}")
 
 def main():
     ps = argparse.ArgumentParser("Batch eval with DSN")
@@ -334,13 +395,13 @@ def main():
     ps.add_argument("--feat_dim", type=int, default=512)
     ps.add_argument("--enc_hidden", type=int, default=256)
     ps.add_argument("--lstm_hidden", type=int, default=128)
-    ps.add_argument("--budget_ratio", type=float, default=0.06)
-    ps.add_argument("--Bmin", type=int, default=3)
-    ps.add_argument("--Bmax", type=int, default=15)
+    ps.add_argument("--budget_ratio", type=float, default=0.05)
+    ps.add_argument("--Bmin", type=int, default=2)
+    ps.add_argument("--Bmax", type=int, default=5)
     ps.add_argument("--sample_stride", type=int, default=5)
     ps.add_argument("--resize_w", type=int, default=320)
     ps.add_argument("--resize_h", type=int, default=180)
-    ps.add_argument("--embedder", type=str, default="resnet50")
+    ps.add_argument("--embedder", type=str, default="clip_vitb32")  # Match V8/V9 training
     ps.add_argument("--scene_threshold", type=int, default=27)
     ps.add_argument("--eval_backbone", type=str, default="resnet50")
     ps.add_argument("--eval_device", type=str, default="cuda")
@@ -362,7 +423,9 @@ def main():
     # Anime-CLIP-IQA
     ps.add_argument("--use_anime_attrs", type=int, default=0, help="Use Anime-CLIP-IQA attributes")
     ps.add_argument("--anime_attrs_dim", type=int, default=6, help="Dimension of anime attributes")
-    ps.add_argument("--min_scene_len", type=int, default=48, help="Min scene length to match prepare_rl_dataset")
+    ps.add_argument("--use_raft_motion", type=int, default=0, help="Use RAFT motion features")
+    ps.add_argument("--motion_dim", type=int, default=128, help="Dimension of motion features")
+    ps.add_argument("--min_scene_len", type=int, default=80, help="Min scene length to match prepare_rl_dataset")
 
     args = ps.parse_args()
 
@@ -376,6 +439,7 @@ def main():
     backend=args.backend, threshold=args.threshold, model_dir=args.model_dir,
     weights_path=args.weights_path, prob_threshold=args.prob_threshold, scene_device=args.scene_device,
     use_anime_attrs=args.use_anime_attrs, anime_attrs_dim=args.anime_attrs_dim,
+    use_raft_motion=args.use_raft_motion, motion_dim=args.motion_dim,
     min_scene_len=args.min_scene_len
     )
 
