@@ -11,8 +11,8 @@ Runs the full V11 pipeline on a single video or directory of videos:
 
 Usage:
     python -m scripts.run_inference_v11 \
-        --video_path path/to/video.mp4 \
-        --checkpoint runs/dsn_v11_simple/best.pt \
+        --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/6261.mp4 \
+        --checkpoint runs/training_v11_final_new/best.pt \
         --output_dir outputs/inference_v11 \
         --device cuda
 """
@@ -72,9 +72,10 @@ class V11Predictor:
         # Scene detector (lazy init)
         self.detector = None
         
-    def get_detector(self, model_dir="src/models/TransNetV2"):
-        if self.detector is None:
-            self.detector = create_detector("transnetv2", model_dir=model_dir, device=self.device)
+    def get_detector(self, model_dir="src/models/TransNetV2", threshold=0.5):
+        # Always create new detector if threshold changes or not created
+        # Simple fix: recreate or update params
+        self.detector = create_detector("transnetv2", model_dir=model_dir, device=self.device, prob_threshold=threshold)
         return self.detector
 
     def process_video(
@@ -83,11 +84,19 @@ class V11Predictor:
         output_dir: str, 
         budget_ratio: float = 0.15,
         b_min: int = 3,
-        b_max: int = 15
+        b_max: int = 15,
+        stride: int = None,
+        save_images: bool = False,
+        scene_threshold: float = 0.5,
+        min_scene_len: int = 15
     ):
         video_path = Path(video_path)
         out_root = Path(output_dir) / video_path.stem
         ensure_dir(out_root)
+        
+        # Save images directory
+        if save_images:
+            ensure_dir(out_root / "keyframes")
         
         # Prepare consolidated outputs
         scene_rows = []
@@ -95,10 +104,10 @@ class V11Predictor:
         all_prob_rows = []
         
         # 1. Detect Scenes
-        print("  Detecting scenes...")
-        detector = self.get_detector()
+        print(f"  Detecting scenes (threshold={scene_threshold}, min_len={min_scene_len})...")
+        detector = self.get_detector(threshold=scene_threshold)
         scenes_raw = detector.detect(str(video_path))
-        scenes = normalize_and_merge_scenes(scenes_raw)
+        scenes = normalize_and_merge_scenes(scenes_raw, min_len_frames=min_scene_len)
         print(f"  Found {len(scenes)} scenes")
         
         # Get video FPS for timecode
@@ -114,10 +123,12 @@ class V11Predictor:
         for i, scene in enumerate(tqdm(scenes, desc="Inferring Scenes")):
             s, e = int(scene.start_frame), int(scene.end_frame)
             scene_len = e - s + 1
-            stride = adaptive_stride(scene_len)
+            
+            # Use custom stride or adaptive
+            curr_stride = stride if stride is not None else adaptive_stride(scene_len)
             
             # Decode frames
-            frames, frame_indices = decode_scene_frames(str(video_path), s, e, stride)
+            frames, frame_indices = decode_scene_frames(str(video_path), s, e, curr_stride)
             
             if len(frames) < 2:
                 continue
@@ -170,6 +181,11 @@ class V11Predictor:
                 # Add to keyframes if selected
                 if is_selected:
                     key_rows.append(row)
+                    
+                    # Save image if requested
+                    if save_images:
+                        img_path = out_root / "keyframes" / f"scene_{i:03d}_frame_{global_idx:06d}.jpg"
+                        cv2.imwrite(str(img_path), frames[local_idx])
         
         # 3. Save Consolidated Results
         import csv
@@ -199,7 +215,11 @@ def main():
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--output_dir", type=str, required=True)
     parser.add_argument("--device", type=str, default="cuda")
-    parser.add_argument("--budget_ratio", type=float, default=0.15)
+    parser.add_argument("--budget_ratio", type=float, default=0.1)
+    parser.add_argument("--stride", type=int, default=None, help="Frame sampling stride (default: adaptive)")
+    parser.add_argument("--save_images", action="store_true", help="Save selected keyframe images")
+    parser.add_argument("--scene_threshold", type=float, default=0.5, help="TransNetV2 boundary threshold")
+    parser.add_argument("--min_scene_len", type=int, default=15, help="Minimum scene length (frames) to merge")
     
     args = parser.parse_args()
     
@@ -210,9 +230,40 @@ def main():
     if inp.is_dir():
         videos = sorted(inp.glob("*.mp4")) + sorted(inp.glob("*.mkv"))
         for v in videos:
-            predictor.process_video(str(v), args.output_dir, args.budget_ratio)
+            predictor.process_video(str(v), args.output_dir, args.budget_ratio, stride=args.stride, save_images=args.save_images, scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len)
     else:
-        predictor.process_video(str(inp), args.output_dir, args.budget_ratio)
+        predictor.process_video(str(inp), args.output_dir, args.budget_ratio, stride=args.stride, save_images=args.save_images, scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len)
 
 if __name__ == "__main__":
     main()
+
+
+"""
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga_test/70025.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir outputs/inference_v11_70025 \
+  --budget_ratio 0.1 \
+  --stride 5 \
+  --save_images
+
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/9046.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir outputs/inference_v11_9046 \
+  --budget_ratio 0.1 \
+  --stride 5 \
+  --save_images
+  
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/115042.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir outputs/inference_v11_115042 \
+  --budget_ratio 0.1 \
+  --stride 5 \
+  --save_images \
+  --scene_threshold 0.8 \
+  --min_scene_len 100
+"""
+
+

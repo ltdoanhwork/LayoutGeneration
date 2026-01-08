@@ -8,7 +8,7 @@ DEVICE="cuda"
 mkdir -p "$OUTPUT_DIR"
 
 # Lấy 10 video đầu tiên
-ls "$VIDEO_DIR"/*.mp4 | head -n 10 | while read -r VIDEO_PATH; do
+ls "$VIDEO_DIR"/*.mp4 | head -n 100 | while read -r VIDEO_PATH; do
     echo "Running inference on: $VIDEO_PATH"
 
     python -m scripts.run_inference_v11 \
@@ -17,3 +17,6 @@ ls "$VIDEO_DIR"/*.mp4 | head -n 10 | while read -r VIDEO_PATH; do
         --output_dir "$OUTPUT_DIR" \
         --device "$DEVICE"
 done
+
+echo "Running keyframe extraction..."
+python repos/keyframe_extracter.py
