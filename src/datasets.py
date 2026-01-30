@@ -23,7 +23,8 @@ def list_scene_dirs(dataset_root: str) -> List[Path]:
     return sorted([p for p in root.glob("*/*") if (p / "feats.npy").exists()])
 
 def load_scene_dir(scene_dir: Path, load_frames: bool = True, load_motion: bool = False, 
-                  load_anime_attrs: bool = False, load_vlm_scores: bool = False) -> SceneSample:
+                  load_anime_attrs: bool = False, load_vlm_scores: bool = False,
+                  attr_suffix: str = "anime_attrs.npy") -> SceneSample:
     """
     Load scene data from directory.
     
@@ -33,9 +34,7 @@ def load_scene_dir(scene_dir: Path, load_frames: bool = True, load_motion: bool 
         load_motion: Whether to load RAFT motion features
         load_anime_attrs: Whether to load Anime-CLIP-IQA attributes
         load_vlm_scores: Whether to load VLM quality scores
-    
-    Returns:
-        SceneSample with loaded data
+        attr_suffix: Filename for attribute loading (default: "anime_attrs.npy")
     """
     feats = np.load(scene_dir / "feats.npy")  # (T,D) L2-normalized
     
@@ -53,7 +52,7 @@ def load_scene_dir(scene_dir: Path, load_frames: bool = True, load_motion: bool 
     # Optional Anime-CLIP-IQA attributes
     anime_attrs = None
     if load_anime_attrs:
-        attrs_path = scene_dir / "anime_attrs.npy"
+        attrs_path = scene_dir / attr_suffix
         if attrs_path.exists():
             anime_attrs = np.load(attrs_path) # (T, K)
             

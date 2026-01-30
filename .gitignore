@@ -32,3 +32,6 @@ objectfree/yoloe_dataset_characters_0.2/*
 objectfree/debug*
 objectfree/weights/*
 objectfree/weight_model/*
+ablation/*
+objectfree/*
+demo_outputs

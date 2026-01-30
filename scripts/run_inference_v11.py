@@ -11,7 +11,7 @@ Runs the full V11 pipeline on a single video or directory of videos:
 
 Usage:
     python -m scripts.run_inference_v11 \
-        --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/6261.mp4 \
+        --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/9046.mp4 \
         --checkpoint runs/training_v11_final_new/best.pt \
         --output_dir outputs/inference_v11 \
         --device cuda
@@ -37,6 +37,84 @@ from scripts.precompute_script.precompute_all_v11 import (
     adaptive_stride, 
     decode_scene_frames
 )
+
+def deduplicate_by_cosine(
+    selected_indices: List[int],
+    features: np.ndarray,
+    probs: np.ndarray,
+    similarity_threshold: float = 0.92,
+    budget: int = None
+) -> List[int]:
+    """
+    Remove duplicate frames using cosine similarity with two-pointer technique.
+    
+    Problem: When stride is small, consecutive frames are very similar.
+    Similar CLIP features → similar high scores → selecting near-duplicate frames.
+    
+    Solution: After initial selection, remove frames that are too similar to 
+    previously accepted frames (cosine similarity > threshold).
+    
+    Args:
+        selected_indices: Initial selected frame indices (sorted by frame order)
+        features: Feature matrix (T, D) - CLIP features
+        probs: Probability scores (T,)
+        similarity_threshold: If cosine > this, consider as duplicate (default 0.92)
+            - 0.90: Aggressive - only keep very different frames
+            - 0.92: Balanced - remove near-similar frames
+            - 0.95: Conservative - only remove near-identical
+        budget: Target number of frames to return
+        
+    Returns:
+        Deduplicated list of frame indices (sorted by frame order)
+    """
+    if len(selected_indices) <= 1:
+        return selected_indices
+    
+    # Normalize features for cosine similarity
+    norms = np.linalg.norm(features, axis=1, keepdims=True) + 1e-8
+    features_norm = features / norms
+    
+    # Two pointers technique: keep track of accepted frames
+    accepted = [selected_indices[0]]  # Always keep first frame
+    
+    for i in range(1, len(selected_indices)):
+        current_idx = selected_indices[i]
+        last_accepted_idx = accepted[-1]
+        
+        # Compute cosine similarity with last accepted frame
+        cosine_sim = np.dot(features_norm[current_idx], features_norm[last_accepted_idx])
+        
+        if cosine_sim < similarity_threshold:
+            # Not a duplicate, accept it
+            accepted.append(current_idx)
+        # else: Duplicate detected, skip this frame
+    
+    # If we removed too many, try to fill from remaining candidates
+    if budget is not None and len(accepted) < budget:
+        # Get all frames sorted by prob (descending), excluding already accepted
+        all_sorted = np.argsort(probs)[::-1]
+        
+        for candidate in all_sorted:
+            if candidate in accepted:
+                continue
+            if len(accepted) >= budget:
+                break
+                
+            # Check if candidate is similar to any accepted frame
+            is_duplicate = False
+            for acc_idx in accepted:
+                cosine_sim = np.dot(features_norm[candidate], features_norm[acc_idx])
+                if cosine_sim >= similarity_threshold:
+                    is_duplicate = True
+                    break
+            
+            if not is_duplicate:
+                accepted.append(candidate)
+        
+        # Re-sort by frame order
+        accepted = sorted(accepted)
+    
+    return accepted
 
 def ensure_dir(p: Path):
     p.mkdir(parents=True, exist_ok=True)
@@ -83,12 +161,13 @@ class V11Predictor:
         video_path: str, 
         output_dir: str, 
         budget_ratio: float = 0.15,
-        b_min: int = 3,
+        b_min: int = 3, #3 Đăng sửa để check
         b_max: int = 15,
         stride: int = None,
         save_images: bool = False,
         scene_threshold: float = 0.5,
-        min_scene_len: int = 15
+        min_scene_len: int = 15,
+        dedup_threshold: float = 0.92  # Cosine similarity threshold for deduplication
     ):
         video_path = Path(video_path)
         out_root = Path(output_dir) / video_path.stem
@@ -147,9 +226,21 @@ class V11Predictor:
                 probs, _ = self.model(feats_t, return_gating=False)
                 probs = probs.squeeze(0).cpu().numpy()
             
-            # Selection
+            # Selection with Cosine Deduplication
             budget = max(b_min, min(b_max, int(len(frames) * budget_ratio)))
-            sel_idx = sorted(np.argsort(probs)[-budget:].tolist())
+            
+            # Step 1: Get top candidates (3x budget as replacement pool)
+            candidate_pool_size = min(len(frames), budget * 3)
+            top_candidates = sorted(np.argsort(probs)[-candidate_pool_size:].tolist())
+            
+            # Step 2: Deduplicate using cosine similarity on CLIP features
+            sel_idx = deduplicate_by_cosine(
+                selected_indices=top_candidates,
+                features=clip_feats,  # Use CLIP features (512-dim) for similarity
+                probs=probs,
+                similarity_threshold=dedup_threshold,
+                budget=budget
+            )
             
             # Collect Scene Data
             scene_rows.append({
@@ -220,6 +311,8 @@ def main():
     parser.add_argument("--save_images", action="store_true", help="Save selected keyframe images")
     parser.add_argument("--scene_threshold", type=float, default=0.5, help="TransNetV2 boundary threshold")
     parser.add_argument("--min_scene_len", type=int, default=15, help="Minimum scene length (frames) to merge")
+    parser.add_argument("--dedup_threshold", type=float, default=0.92, 
+                        help="Cosine similarity threshold for deduplication (0.90=aggressive, 0.95=conservative)")
     
     args = parser.parse_args()
     
@@ -230,9 +323,19 @@ def main():
     if inp.is_dir():
         videos = sorted(inp.glob("*.mp4")) + sorted(inp.glob("*.mkv"))
         for v in videos:
-            predictor.process_video(str(v), args.output_dir, args.budget_ratio, stride=args.stride, save_images=args.save_images, scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len)
+            predictor.process_video(
+                str(v), args.output_dir, args.budget_ratio, 
+                stride=args.stride, save_images=args.save_images, 
+                scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len,
+                dedup_threshold=args.dedup_threshold
+            )
     else:
-        predictor.process_video(str(inp), args.output_dir, args.budget_ratio, stride=args.stride, save_images=args.save_images, scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len)
+        predictor.process_video(
+            str(inp), args.output_dir, args.budget_ratio, 
+            stride=args.stride, save_images=args.save_images, 
+            scene_threshold=args.scene_threshold, min_scene_len=args.min_scene_len,
+            dedup_threshold=args.dedup_threshold
+        )
 
 if __name__ == "__main__":
     main()
@@ -264,6 +367,26 @@ python3 -m scripts.run_inference_v11 \
   --save_images \
   --scene_threshold 0.8 \
   --min_scene_len 100
+
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/9046.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir outputs/inference_v11_9046 \
+  --budget_ratio 0.2 \
+  --stride 5 \
+  --save_images \
+  --scene_threshold 0.8 \
+  --min_scene_len 100
+
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/32030.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir outputs/inference_v11_32030 \
+  --budget_ratio 0.1 \
+  --stride 8 \
+  --save_images \
+  --scene_threshold 0.8 \
+  --min_scene_len 50
 """
 
 

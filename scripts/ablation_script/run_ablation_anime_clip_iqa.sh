@@ -63,7 +63,8 @@ run_exp() {
 echo -e "\n====== GROUP 1: TRACKS ======"
 
 # Track A: Feature-only (CLIP + Anime attrs as input)
-run_exp "1_track_A_features" --diversity_weight 0.3
+# Note: Optimizes generic reward (Rec + Div) but has access to Anime features
+run_exp "1_track_A_features" --diversity_weight 0.3 --no_anime_reward --rec_weight 5.0
 
 # Track B: Reward-only (CLIP only, but optimize for anime quality)
 run_exp "1_track_B_reward" --diversity_weight 0.3 --no_anime_attrs

@@ -1,0 +1,42 @@
+\begin{table*}[t]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.1}
+\begin{tabular}{@{} l c c c c c c @{}}
+\toprule
+\textbf{Ablation Setting} & \textbf{MPR} $\uparrow$ & \textbf{Top10} $\uparrow$ & \textbf{RecErr} $\downarrow$ & \textbf{FD} $\downarrow$ & \textbf{TempCov} $\uparrow$ & \textbf{Comp.} $\uparrow$ \\
+\midrule
+\multicolumn{7}{l}{\textbf{1. Reward Design}} \\
+\hspace{3mm} Baseline (Div Only) & 0.696 & 0.455 & 0.0467 & 0.102 & 0.996 & 1.621 \\
+\hspace{3mm} No Diversity & 0.726 & 0.443 & 0.0566 & 0.120 & 0.993 & 1.631 \\
+\hspace{3mm} Strong Diversity & 0.712 & 0.534 & 0.0517 & 0.114 & 0.994 & 1.711 \\
+\hspace{3mm} RecErr Opt & \textbf{0.802} & \textbf{0.655} & 0.0522 & 0.112 & 0.995 & \textbf{1.923} \\
+\hspace{3mm} Fr\'echet Opt & 0.478 & 0.126 & 0.0513 & 0.105 & 0.994 & 1.070 \\
+\hspace{3mm} Combined Rep & 0.749 & 0.502 & 0.0525 & 0.111 & 0.994 & 1.717 \\
+\midrule
+\multicolumn{7}{l}{\textbf{2. Input Signals}} \\
+\hspace{3mm} Visual Features Only & 0.706 & 0.427 & \textbf{0.0452} & \textbf{0.099} & 0.995 & 1.603 \\
+\hspace{3mm} Full (Visual + Aes) & 0.696 & 0.455 & 0.0467 & 0.102 & \textbf{0.996} & 1.621 \\
+\midrule
+\multicolumn{7}{l}{\textbf{3. Architecture}} \\
+\hspace{3mm} No Attention & 0.728 & 0.423 & 0.0428 & 0.091 & 0.995 & 1.622 \\
+\hspace{3mm} Attn 1-Layer & \textbf{0.783} & \textbf{0.556} & 0.0494 & 0.106 & 0.995 & \textbf{1.807} \\
+\hspace{3mm} Attn 2-Layer (Base) & 0.696 & 0.455 & 0.0467 & 0.102 & \textbf{0.996} & 1.621 \\
+\hspace{3mm} Attn 4-Layer & 0.494 & 0.214 & 0.0658 & 0.142 & 0.992 & 1.164 \\
+\hspace{3mm} Gate Small & 0.767 & 0.535 & 0.0499 & 0.107 & \textbf{0.996} & 1.770 \\
+\hspace{3mm} Gate Large & 0.716 & 0.497 & 0.0519 & 0.112 & 0.994 & 1.679 \\
+\midrule
+\multicolumn{7}{l}{\textbf{4. RL Budget}} \\
+\hspace{3mm} Budget 10\% & 0.462 & 0.148 & 0.0653 & 0.148 & 0.995 & 1.068 \\
+\hspace{3mm} Budget 15\% & 0.696 & 0.455 & 0.0467 & 0.102 & 0.996 & 1.621 \\
+\hspace{3mm} Budget 25\% & \textbf{0.729} & \textbf{0.741} & \textbf{0.0365} & \textbf{0.075} & \textbf{0.997} & \textbf{1.947} \\
+\midrule
+\multicolumn{7}{l}{\textbf{5. Entropy Reg.}} \\
+\hspace{3mm} Low Entropy & \textbf{0.790} & \textbf{0.589} & 0.0499 & 0.108 & 0.995 & \textbf{1.846} \\
+\hspace{3mm} High Entropy & 0.471 & 0.150 & 0.0544 & 0.113 & 0.994 & 1.085 \\
+\bottomrule
+\end{tabular}
+\caption{Detailed ablation study on reward shaping, feature configuration, architecture depth, and RL stability settings. (Comp. = Composite Score)}
+\label{tab:ablation_results}
+\end{table*}

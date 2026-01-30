@@ -39,7 +39,7 @@ if [[ "$MODE" == "train" || "$MODE" == "train_eval" ]]; then
     echo ""
     echo "========== TRAINING PHASE =========="
     
-    conda run -n sam python $TRAIN_SCRIPT \
+    PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/ablation/LLMVS python $TRAIN_SCRIPT \
         --dataset-root $TRAIN_DATASET \
         --save-dir $SAVE_DIR \
         --gpu $GPU_ID \
@@ -50,7 +50,9 @@ if [[ "$MODE" == "train" || "$MODE" == "train_eval" ]]; then
         --num-layers 3 \
         --lr 1e-4 \
         --num-episode 5 \
-        --beta 0.01
+        --beta 0.01 \
+        --verbose \
+        --save-results
 fi
 
 # Evaluation phase
@@ -69,7 +71,7 @@ if [[ "$MODE" == "eval" || "$MODE" == "train_eval" ]]; then
     
     echo "Checkpoint: ${CHECKPOINT:-'No checkpoint found'}"
     
-    conda run -n sam python $EVAL_SCRIPT \
+    PYTHONPATH=$PYTHONPATH:$(pwd):$(pwd)/ablation/LLMVS python $EVAL_SCRIPT \
         --option B \
         --dataset-root $TEST_DATASET \
         --save-dir $SAVE_DIR/eval \
