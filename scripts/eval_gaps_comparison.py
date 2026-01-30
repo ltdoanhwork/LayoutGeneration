@@ -206,7 +206,7 @@ def evaluate_checkpoint(
 def main():
     parser = argparse.ArgumentParser(description="Evaluate LPIPS and Feature Gaps")
     parser.add_argument("--checkpoint_dir", type=str, 
-                       default="/home/serverai/ltdoanh/LayoutGeneration/runs/training_v11_final_new",
+                       default="/home/serverai/ltdoanh/LayoutGeneration/runs/training_v11_recerr_w0.5",
                        help="Directory containing checkpoints")
     parser.add_argument("--val_root", type=str,
                        default="/home/serverai/ltdoanh/LayoutGeneration/data/sakuga_dataset_v11_new_test",

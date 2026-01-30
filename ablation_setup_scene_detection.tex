@@ -1,0 +1,19 @@
+\subsection{Multiple Scene Detection Strategy}
+\label{subsec:scene_detection_strategy}
+
+Since our framework operates on a per-scene basis to select keyframes, the quality and characteristics of scene segmentation are critical upstream factors. To evaluate the robustness of our framework against different scene definition strategies, we conduct an ablation study comparing two distinct scene detection backends and varying scene length constraints.
+
+\paragraph{Backends.} We employ two scene detection methods to represent different paradigms:
+\begin{itemize}
+    \item \textbf{TransNet V2}~\cite{soucek2020transnet}: A state-of-the-art deep learning-based shot transition detector. It is designed to handle complex transitions (e.g., dissolves, wipes) common in animation, providing high-accuracy segmentation.
+    \item \textbf{PySceneDetect}~\cite{pyscenedetect}: A standard content-aware detector that relies on intensity changes. This serves as a non-learning baseline to test if the RL agent can perform well with simpler pre-processing.
+\end{itemize}
+
+\paragraph{Scene Length Strategies.} We further investigate the impact of temporal context by imposing different length constraints during the segmentation process:
+\begin{itemize}
+    \item \textbf{Diverse (Adaptive):} We allow the detectors to output scenes with a wide valid duration range ($30$--$500$ frames). This strategy preserves the natural pacing of the content, resulting in a mix of short action cuts and longer dialogue or panning shots. This is the default setting for our main baseline.
+    \item \textbf{Fixed Short ($30$--$100$ frames):} We enforce a strict upper bound of $100$ frames. Long scenes are forcibly split. This setting tests the model's ability to operate with limited temporal context, mimicking scenarios where computational budget or latency constraints require processing smaller chunks.
+    \item \textbf{Fixed Long ($150$--$300$ frames):} We enforce a higher minimum duration ($150$ frames), merging shorter shots if necessary. This setting evaluates the model's capacity to summarize longer sequences that may contain multiple semantic shots, challenging the ``one scene, one keyframe set'' assumption.
+\end{itemize}
+
+By comparing these configurations, we aim to demonstrate that our RL-based approach remains effective across different segmentation qualities and is not overly sensitive to the specific scene boundaries provided by the pre-processor.
