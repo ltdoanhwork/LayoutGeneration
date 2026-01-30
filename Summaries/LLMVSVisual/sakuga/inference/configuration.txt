@@ -1,0 +1,11 @@
+Configurations
+{'dataset': 'sakuga',
+ 'device': device(type='cuda', index=0),
+ 'input_dim': 512,
+ 'model': 'LLMVSVisual',
+ 'reduced_dim': 2048,
+ 'save_dir_root': 'Summaries/LLMVSVisual/sakuga/inference',
+ 'tag': 'inference'}
+
+
+

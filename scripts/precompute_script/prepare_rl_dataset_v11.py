@@ -41,11 +41,12 @@ def normalize_and_merge_scenes_v11(
     scenes: List[Scene],
     min_len_frames: int = 30,
     max_len_frames: int = 500,
+    force_split: bool = False,
 ) -> List[Scene]:
     """
     V11: Allow diverse scene lengths.
     - min_len_frames: Merge very short scenes (< 30 frames)
-    - max_len_frames: Don't force split - just log warning
+    - max_len_frames: If force_split=True, split scenes longer than this.
     """
     if not scenes:
         return []
@@ -74,13 +75,35 @@ def normalize_and_merge_scenes_v11(
         else:
             merged.append(sc)
     
-    # Log long scenes (but don't split)
+    if not force_split:
+        # Just log long scenes
+        for sc in merged:
+            length = sc.end_frame - sc.start_frame + 1
+            if length > max_len_frames:
+                log(f"  Long scene: {length} frames (not splitting)")
+        return merged
+        
+    # Force split long scenes
+    final_scenes: List[Scene] = []
     for sc in merged:
         length = sc.end_frame - sc.start_frame + 1
         if length > max_len_frames:
-            log(f"  Long scene: {length} frames (not splitting)")
-    
-    return merged
+            # Split into chunks
+            cur_start = sc.start_frame
+            while cur_start <= sc.end_frame:
+                # Ensure the last chunk isn't too tiny if possible, 
+                # but simplistic splitting is usually requested for "fixed length".
+                # We'll just split greedily by max_len_frames.
+                cur_end = min(cur_start + max_len_frames - 1, sc.end_frame)
+                
+                # Check if this split results in a very small remainder?
+                # For this ablation, strictly adhering to max_len is key.
+                final_scenes.append(Scene(cur_start, cur_end))
+                cur_start = cur_end + 1
+        else:
+            final_scenes.append(sc)
+            
+    return final_scenes
 
 
 def adaptive_stride(scene_len: int) -> int:
@@ -204,6 +227,7 @@ def main():
     parser.add_argument("--prob_threshold", type=float, default=0.5)
     parser.add_argument("--min_scene_len", type=int, default=30)
     parser.add_argument("--max_scene_len", type=int, default=500)
+    parser.add_argument("--force_split", action="store_true", help="Force split scenes larger than max_scene_len")
     
     # Frame processing
     parser.add_argument("--resize_w", type=int, default=0)
@@ -264,7 +288,8 @@ def main():
         scenes = normalize_and_merge_scenes_v11(
             scenes_raw,
             min_len_frames=args.min_scene_len,
-            max_len_frames=args.max_scene_len
+            max_len_frames=args.max_scene_len,
+            force_split=args.force_split
         )
         
         log(f"  {len(scenes)} scenes after processing")

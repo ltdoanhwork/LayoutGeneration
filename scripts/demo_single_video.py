@@ -328,4 +328,6 @@ python3 scripts/demo_single_video.py --video /home/serverai/ltdoanh/LayoutGenera
 python3 scripts/demo_single_video.py --video /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/115042.mp4 --budget_ratio 0.1 --output outputs/demo_115042_results.json --output_dir demo_115042_vis --stride 7 --scene_threshold 0.8   --min_scene_len 100
 
 python3 scripts/demo_single_video.py --video /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/15019.mp4 --budget_ratio 0.1 --output outputs/demo_15019_results.json --output_dir demo_15019_vis --stride 7 --scene_threshold 0.8   --min_scene_len 100
+
+python3 scripts/demo_single_video.py --video /home/serverai/ltdoanh/LayoutGeneration/data/samples/Sakuga/14652.mp4 --budget_ratio 0.1 --output outputs/demo_14652_results.json --output_dir demo_14652_vis --stride 7 --scene_threshold 0.8   --min_scene_len 50
 """

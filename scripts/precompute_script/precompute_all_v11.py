@@ -76,6 +76,15 @@ def normalize_and_merge_scenes(
         else:
             merged.append(sc)
     
+    # Post-process: Check if the first scene is still too short (it was never merged into a previous one)
+    # If so, merge it forward into the second scene.
+    if len(merged) > 1:
+        first = merged[0]
+        if (first.end_frame - first.start_frame + 1) < min_len_frames:
+            second = merged[1]
+            merged[1] = Scene(first.start_frame, second.end_frame)
+            merged.pop(0)
+    
     return merged
 
 

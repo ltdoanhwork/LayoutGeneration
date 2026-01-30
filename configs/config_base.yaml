@@ -1,8 +1,51 @@
-model_path: "/home/serverai/ltdoanh/LayoutGeneration/objectfree/yoloe/runs/detect/train8/weights/best.pt"
-input_path: "/home/serverai/ltdoanh/LayoutGeneration/yolo_splits/new_dataset/general/test/images/Kung_Fu_Panda_2018_STqJ_Up4iFg_3702.jpg"
-threshold: 0.2
-prompt: "characters in cartoon"
-save_path: "/home/serverai/ltdoanh/LayoutGeneration/yolo_splits/output"
-type_content: "image"  # 'image' or 'video'
-device: "cuda"  # 'cuda' or 'cpu'
-pe_path: "/home/serverai/ltdoanh/LayoutGeneration/objectfree/yoloe/character-pe.pt"
+# =========================================================
+# TOKENS
+# =========================================================
+tokens:
+  sam3: "hf_REDACTED"          
+  dinov3: "hf_REDACTED"        
+
+# =========================================================
+# SAM3 CONFIG
+# =========================================================
+sam3:
+  text_prompt: "anime character, object"
+  score_thresh: 0.1
+
+# =========================================================
+# DINOv3 CONFIG
+# =========================================================
+dinov3:
+  model_name: "facebook/dinov3-vitl16-pretrain-lvd1689m"
+  cache_dir: "home/serverai/ltdoanh/LayoutGeneration/objectfree/Dinov3/weights/dinov3"
+
+# =========================================================
+# CHARACTER BANK
+# =========================================================
+bank:
+  high_score_thresh: 0.5
+  match_sim_thresh: 0.7
+
+# =========================================================
+# IO
+# =========================================================
+io:
+  input_folder: "/home/serverai/ltdoanh/LayoutGeneration/data/FINAL/keyframe/63592/keyframes"
+  output_root: "/home/serverai/ltdoanh/LayoutGeneration/data/FINAL/test/object_free/63592"
+
+# =========================================================
+# RUNTIME
+# =========================================================
+runtime:
+  device: "cuda"          # cuda | cpu
+  min_box_size: 20
+  max_images: null        # null = all images
+  verbose: true
+
+# =========================================================
+# MODE FLAGS
+# =========================================================
+mode:
+  visualize: true         # true = save bbox images
+  save_json: true         # true = save json result
+  draw_rejected: true     # false = only draw kept objects

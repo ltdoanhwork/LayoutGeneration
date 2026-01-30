@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-V11 FINAL: Comprehensive Training with All Metrics
+V11 CONSTRAINED: Training with Lagrangian Constraints (PremiumRewardV8)
 
-Features:
-1. 6 Comprehensive Metrics:
-   - RecErr (Representativeness, lower is better)
-   - Frechet (Representativeness, lower is better)
-   - MPR (Aesthetic, higher is better)
-   - Top10 (Aesthetic, higher is better)
-   - LPIPS_Div (Diversity, higher is better)
-   - Temporal Coverage (Diversity, higher is better)
+Based on V11 Final, but replaces the linear reward combination with 
+Constrained Optimization (PremiumRewardV8) to solve the conflict
+between Quality (MPR) and Representativeness (RecErr).
 
-2. Per-Attribute MPR with Radar Chart Visualization
-3. Composite Score for Best Model Selection
-4. TensorBoard logging for all metrics
+Improvements:
+- Uses Lagrangian multipliers to enforce RecErr < 0.35
+- Uses Quantile rewards for safer Anime Quality optimization
+- Prevents policy collapse seen with high linear weights
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ from tqdm import tqdm
 # Core imports
 from src.datasets import build_epoch_index, load_scene_dir
 from src.models.dsn_v8 import DSNMultiTaskV8, create_dsn_v8
-from src.rl.rewards import reward_combo_v4
+from src.rl.premium_rewards_v8 import create_reward_system_v8
 from src.rl.distribution_metrics import (
     DistributionAwareMetrics,
     ATTR_NAMES,
@@ -149,8 +145,8 @@ def create_radar_chart(
     return True
 
 
-class FinalTrainer:
-    """Final trainer with comprehensive metrics."""
+class ConstrainedTrainer:
+    """Trainer using PremiumRewardV8 with Lagrangian constraints."""
     
     def __init__(
         self,
@@ -160,7 +156,13 @@ class FinalTrainer:
         entropy_coef: float = 0.02,
         max_grad_norm: float = 0.5,
         device: str = "cuda",
-        diversity_weight: float = 0.3,
+        # Reward args
+        rec_err_threshold: float = 0.35,
+        coverage_threshold: float = 0.3,
+        diversity_threshold: float = 0.25,
+        anime_scale: float = 3.0,
+        quantile_scale: float = 2.0,
+        total_epochs: int = 60,
     ):
         self.model = model
         self.optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -168,10 +170,17 @@ class FinalTrainer:
         self.entropy_coef = entropy_coef
         self.max_grad_norm = max_grad_norm
         self.device = device
-        self.diversity_weight = diversity_weight
-        self.rec_weight = 0.0  # Will be set from args
-        self.frechet_weight = 0.0  # Will be set from args
-        self.no_anime_reward = False  # Will be set from args
+        
+        # Initialize Constrained Reward System
+        self.reward_system = create_reward_system_v8(
+            rec_err_threshold=rec_err_threshold,
+            coverage_threshold=coverage_threshold,
+            diversity_threshold=diversity_threshold,
+            total_epochs=total_epochs,
+            use_curriculum=True,
+            anime_scale=anime_scale,
+            quantile_scale=quantile_scale
+        )
         
         # Running statistics for reward normalization
         self.reward_mean = 0.0
@@ -193,79 +202,29 @@ class FinalTrainer:
         features: np.ndarray,
         anime_attrs: np.ndarray,
         sel_idx: List[int],
+        current_epoch: int,
     ) -> Tuple[float, Dict[str, float]]:
-        """Compute reward for optimization."""
-        T = len(anime_attrs)
+        """Compute constrained reward."""
         if len(sel_idx) == 0:
-            return 0.0, {"mpr": 0.5, "top10": 0.0, "diversity": 0.0}
+            return 0.0, {"mpr": 0.5}
         
-        # Compute metrics using reward_combo_v4
-        _, components = reward_combo_v4(
+        # Use PremiumRewardV8
+        rewards, components = self.reward_system.compute_reward(
             feats_all=features,
             sel_idx=sel_idx,
-            w_rec=1.0, 
-            w_fd=1.0,
-            return_components=True
+            anime_attrs=anime_attrs,
+            current_epoch=current_epoch,
+            update_lagrangian=True  # Update multipliers online
         )
-        rec_err = -components.get("rec", 0.0)
-        frechet = -components.get("fd", 0.0)
         
-        # Quality: mean of anime attributes
-        quality = anime_attrs.mean(axis=1)
+        final_reward = rewards["total"]
         
-        # Compute percentile ranks
-        ranks = np.argsort(np.argsort(quality))
-        percentiles = ranks / max(1, T - 1)
+        # Add extra info for logging
+        info = {**components}
+        info["total_reward"] = final_reward
         
-        # Mean Percentile Rank
-        sel_percentiles = percentiles[sel_idx]
-        mpr = float(np.mean(sel_percentiles))
-        
-        # Top-10% recall
-        k10 = max(1, int(T * 0.1))
-        top10_idx = set(np.argsort(quality)[-k10:])
-        top10 = len(set(sel_idx) & top10_idx) / k10
-        
-        # Diversity: penalize clustering
-        if len(sel_idx) >= 2:
-            sorted_idx = sorted(sel_idx)
-            gaps = np.diff(sorted_idx)
-            expected_gap = T / (len(sel_idx) + 1)
-            min_gap = float(np.min(gaps))
-            diversity_score = min(1.0, min_gap / expected_gap)
-        else:
-            diversity_score = 0.0
-        
-        # Combined reward
-        if self.no_anime_reward:
-            quality_reward = 0.0
-        else:
-            quality_reward = (mpr - 0.5) * 6.0
-        diversity_reward = (diversity_score - 0.5) * 2.0
-        
-        # Base reward: Quality + Diversity
-        final_reward = quality_reward + self.diversity_weight * diversity_reward
-        
-        # Add RecErr to reward (negative because lower is better)
-        if self.rec_weight > 0:
-            # rec_err is positive error, we want to minimize it
-            rec_reward = -rec_err * self.rec_weight
-            final_reward += rec_reward
-        
-        # Add Frechet to reward (negative because lower is better)
-        if self.frechet_weight > 0:
-            # Frechet can be large, normalize and clip
-            frechet_norm = min(frechet, 1.0)  # Clip to reasonable range
-            frechet_reward = -frechet_norm * self.frechet_weight
-            final_reward += frechet_reward
-        
-        info = {
-            "mpr": mpr,
-            "top10": top10,
-            "diversity": diversity_score,
-            "RecErr": rec_err,
-            "Frechet": frechet,
-        }
+        # Helper for progress bar
+        info["mpr"] = components.get("quantile_mean_percentile", 0.5)
         
         return final_reward, info
     
@@ -274,6 +233,7 @@ class FinalTrainer:
         features: torch.Tensor,
         anime_attrs: np.ndarray,
         budget: int,
+        epoch: int,
     ) -> Dict[str, float]:
         """Single training step."""
         self.model.train()
@@ -291,7 +251,9 @@ class FinalTrainer:
         
         # Compute reward
         features_np = features.squeeze(0).cpu().numpy()
-        reward, reward_info = self.compute_reward(features_np, anime_attrs, sel_idx)
+        # Pass epoch for curriculum
+        reward, reward_info = self.compute_reward(features_np, anime_attrs, sel_idx, epoch)
+        
         self.update_reward_stats(reward)
         norm_reward = self.normalize_reward(reward)
         
@@ -419,10 +381,19 @@ def validate_epoch(
             top10_idx = set(np.argsort(quality)[-k10:])
             top10 = len(set(sel_idx) & top10_idx) / k10
             
-            # 5. Temporal Coverage (higher is better)
-            temp_cov = temporal_coverage(sample.feats, feats_sel, tau=0.3)
-            if np.isnan(temp_cov):
-                temp_cov = 0.0
+            # 5. Temporal Coverage (higher is better for Fraction, lower for Std)
+            # We compute both: Fraction for Composite, Std for Logging
+            temp_cov_frac = temporal_coverage(sample.feats, feats_sel, tau=0.3)
+            if np.isnan(temp_cov_frac):
+                temp_cov_frac = 0.0
+                
+            # Compute Std Dev of gaps (for logging per user request)
+            sorted_s = sorted(sel_idx)
+            if len(sorted_s) > 1:
+                gaps = np.diff(sorted_s)
+                temp_cov_std = float(np.std(gaps))
+            else:
+                temp_cov_std = 0.0
             
             # Per-attribute percentiles
             per_attr = metrics_computer.compute_per_attribute_percentile(sample.anime_attrs, sel_idx)
@@ -432,9 +403,10 @@ def validate_epoch(
             metrics = {
                 "mpr": mpr,
                 "top10": top10,
-                "RecErr": rec_err,
+                "RecErr": rec_err, # This is Feature Gap
                 "Frechet": frechet,
-                "TempCov": temp_cov,
+                "TempCov": temp_cov_frac, # For score
+                "TempCovStd": temp_cov_std, # For log
                 "LPIPS_Div": 0.0, # Placeholder
             }
             all_metrics.append(metrics)
@@ -446,9 +418,20 @@ def validate_epoch(
     if not all_metrics:
         return {}
     
-    # Aggregate metrics
-    avg_metrics = {k: float(np.mean([m[k] for m in all_metrics if not np.isnan(m[k])])) 
-                   for k in all_metrics[0].keys()}
+    # Aggregate metrics (Mean AND Std)
+    avg_metrics = {}
+    std_metrics = {}
+    
+    metric_keys = ["mpr", "top10", "RecErr", "Frechet", "TempCov", "TempCovStd"]
+    
+    for k in metric_keys:
+        vals = [m[k] for m in all_metrics if not np.isnan(m[k])]
+        if vals:
+            avg_metrics[k] = float(np.mean(vals))
+            std_metrics[k] = float(np.std(vals))
+        else:
+            avg_metrics[k] = 0.0
+            std_metrics[k] = 0.0
     
     # Aggregate per-attribute percentiles
     avg_per_attr = {}
@@ -462,15 +445,17 @@ def validate_epoch(
     full_results = {**avg_metrics, **avg_per_attr}
     
     # Compute composite score (higher is better)
-    # score = MPR + Top10 - 0.5*RecErr - 0.5*Frechet + 0.5*TempCov
+    # score = MPR + Top10 - 0.5*RecErr - 0.05*Frechet - 0.1*TempCovStd
+    # Note: TempCovStd is "Lower is Better" (Uniformity), so we subtract it.
     composite_score = (
         avg_metrics.get("mpr", 0.5) +
         avg_metrics.get("top10", 0.0) -
         0.5 * min(avg_metrics.get("RecErr", 0.0), 1.0) -  # Clamp RecErr contribution
-        0.05 * min(avg_metrics.get("Frechet", 0.0), 1.0) +  # Frechet can be large
-        0.5 * avg_metrics.get("TempCov", 0.0)
+        0.05 * min(avg_metrics.get("Frechet", 0.0), 1.0) - # Frechet (Lower Good)
+        0.1 * min(avg_metrics.get("TempCovStd", 0.0), 5.0) # TempCovStd (Lower Good)
     )
     full_results["composite_score"] = composite_score
+
     
     # Save validation results JSON
     val_result_path = os.path.join(epoch_dir, "val_results.json")
@@ -481,11 +466,36 @@ def validate_epoch(
     radar_path = os.path.join(epoch_dir, "radar_quality.png")
     create_radar_chart(avg_per_attr, radar_path, title=f"Epoch {epoch} Per-Attribute Percentiles")
     
+    # Print Summary matching eval_v11_gaps.py format
+    mpr_m, mpr_s = avg_metrics.get("mpr", 0.0), std_metrics.get("mpr", 0.0)
+    top10_m, top10_s = avg_metrics.get("top10", 0.0), std_metrics.get("top10", 0.0)
+    feat_m, feat_s = avg_metrics.get("RecErr", 0.0), std_metrics.get("RecErr", 0.0)
+    frechet_m, frechet_s = avg_metrics.get("Frechet", 0.0), std_metrics.get("Frechet", 0.0)
+    temp_m, temp_s = avg_metrics.get("TempCovStd", 0.0), std_metrics.get("TempCovStd", 0.0)
+    
+    print(f"\n{'='*70}")
+    print(f"EPOCH {epoch} VALIDATION RESULTS (Composite: {composite_score:.4f})")
+    print(f"{'='*70}")
+    print(f"LPIPS Gap:   N/A (See Final Eval)")
+    print(f"DISTS Gap:   N/A (See Final Eval)")
+    print(f"Feat Gap:    {feat_m:.4f} \u00B1 {feat_s:.4f} (RecErr)")
+    print(f"Frechet:     {frechet_m:.4f} \u00B1 {frechet_s:.4f}")
+    print(f"MPR:         {mpr_m:.4f} \u00B1 {mpr_s:.4f}")
+    print(f"Top10:       {top10_m:.4f} \u00B1 {top10_s:.4f}")
+    print(f"Temp Cov:    {temp_m:.4f} \u00B1 {temp_s:.4f} (StdDev)")
+    
+    print(f"\nPer-Attribute MPR:")
+    for name in ATTR_NAMES:
+        val = avg_per_attr.get(f"percentile_{name}", 0.5)
+        bar = "█" * int(val * 20) + "░" * (20 - int(val * 20))
+        print(f"  {name.capitalize():12s}: {val:.3f} |{bar}|")
+    print(f"{'='*70}\n")
+    
     return full_results
 
 
 def main():
-    parser = argparse.ArgumentParser(description="V11 Final Training with Comprehensive Metrics")
+    parser = argparse.ArgumentParser(description="V11 Constrained Training with Lagrangian Optimization")
     parser.add_argument("--dataset_root", type=str, required=True, help="Train data")
     parser.add_argument("--val_root", type=str, required=True, help="Test data (precomputed)")
     parser.add_argument("--save_dir", type=str, required=True)
@@ -498,11 +508,16 @@ def main():
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--entropy_coef", type=float, default=0.02)
     parser.add_argument("--clip_range", type=float, default=0.2)
-    parser.add_argument("--diversity_weight", type=float, default=0.3)
-    parser.add_argument("--rec_weight", type=float, default=0.0, help="Weight for RecErr optimization (0=off)")
-    parser.add_argument("--frechet_weight", type=float, default=0.0, help="Weight for Frechet optimization (0=off)")
+    
+    # Constraints
+    parser.add_argument("--rec_err_thresh", type=float, default=0.35, help="Constraint for RecErr")
+    parser.add_argument("--coverage_thresh", type=float, default=0.3, help="Constraint for Coverage Gap")
+    parser.add_argument("--diversity_thresh", type=float, default=0.25, help="Constraint for Diversity")
+    
+    parser.add_argument("--anime_scale", type=float, default=3.0, help="Scale for Anime Quality reward")
+    parser.add_argument("--quantile_scale", type=float, default=2.0, help="Scale for Quantile reward")
+
     parser.add_argument("--no_anime_attrs", action="store_true", help="Disable anime attributes input")
-    parser.add_argument("--no_anime_reward", action="store_true", help="Disable anime quality reward (for ablation)")
     parser.add_argument("--num_attn_layers", type=int, default=2)
     parser.add_argument("--gating_hidden", type=int, default=64, help="Gating network hidden dim")
     parser.add_argument("--lstm_hidden", type=int, default=128, help="LSTM hidden size")
@@ -537,16 +552,18 @@ def main():
         lstm_hidden=args.lstm_hidden,
     ).to(args.device)
     
-    trainer = FinalTrainer(
+    trainer = ConstrainedTrainer(
         model, lr=args.lr,
         entropy_coef=args.entropy_coef,
         clip_range=args.clip_range,
         device=args.device,
-        diversity_weight=args.diversity_weight,
+        rec_err_threshold=args.rec_err_thresh,
+        coverage_threshold=args.coverage_thresh,
+        diversity_threshold=args.diversity_thresh,
+        anime_scale=args.anime_scale,
+        quantile_scale=args.quantile_scale,
+        total_epochs=args.epochs
     )
-    trainer.rec_weight = args.rec_weight
-    trainer.frechet_weight = args.frechet_weight
-    trainer.no_anime_reward = args.no_anime_reward
     
     best_score = -float('inf')
     
@@ -568,12 +585,13 @@ def main():
             feats_t = torch.from_numpy(feats_input).float().unsqueeze(0)
             budget = max(args.Bmin, min(args.Bmax, int(len(sample.feats) * args.budget_ratio)))
             
-            info = trainer.train_step(feats_t, sample.anime_attrs, budget)
+            info = trainer.train_step(feats_t, sample.anime_attrs, budget, epoch)
             epoch_info.append(info)
             
             pbar.set_postfix({
                 "loss": f"{info['loss']:.3f}",
-                "mpr": f"{info['mpr']:.2f}",
+                "rec": f"{info.get('rec_err', 0.0):.3f}",
+                "pen": f"{info.get('constraint_penalty', 0.0):.3f}",
             })
         
         if not epoch_info:
@@ -601,28 +619,10 @@ def main():
                 writer.add_scalar(f"val/{k}", v, epoch)
         
         # Print summary
-        mpr = val_metrics.get("mpr", 0.0)
-        top10 = val_metrics.get("top10", 0.0)
-        rec = val_metrics.get("RecErr", 0.0)
-        frechet = val_metrics.get("Frechet", 0.0)
-        temp_cov = val_metrics.get("TempCov", 0.0)
-        temp_cov = val_metrics.get("TempCov", 0.0)
+        # Summary is already printed in validate_epoch
         composite = val_metrics.get("composite_score", 0.0)
-        
-        print(f"\n{'='*60}")
-        print(f"Epoch {epoch} Validation Summary:")
-        print(f"  Aesthetic:         MPR={mpr:.4f}, Top10={top10:.4f}")
-        print(f"  Representativeness: RecErr={rec:.4f}, Frechet={frechet:.4f}")
-        print(f"  Diversity:         TempCov={temp_cov:.4f}")
-        print(f"  Composite Score:   {composite:.4f}")
-        
-        # Per-attribute breakdown
-        print(f"\n  Per-Attribute MPR:")
-        for name in ATTR_NAMES:
-            val = val_metrics.get(f"percentile_{name}", 0.5)
-            bar = "█" * int(val * 20) + "░" * (20 - int(val * 20))
-            print(f"    {name.capitalize():12s}: {val:.3f} |{bar}|")
-        print(f"{'='*60}\n")
+        print(f"  Best so far: {best_score:.4f}")
+
         
         # Save best model
         if composite > best_score:
