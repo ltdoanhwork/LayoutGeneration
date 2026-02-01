@@ -35,3 +35,5 @@ objectfree/weight_model/*
 ablation/*
 objectfree/*
 demo_outputs
+demo_*
+output/*

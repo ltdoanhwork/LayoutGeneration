@@ -30,7 +30,7 @@ from tqdm import tqdm
 
 from src.scene_detection import create_detector, Scene
 from src.models.dsn_v8 import create_dsn_v8
-from scripts.precompute_script.precompute_all_v11 import (
+from utils.shared_extractors import (
     CLIPExtractor, 
     MultiPromptScorer, 
     normalize_and_merge_scenes, 
