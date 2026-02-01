@@ -27,6 +27,9 @@ EPOCHS=50
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 export OMP_NUM_THREADS=4
 
+# Add project root to PYTHONPATH to find 'src'
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+
 mkdir -p $SAVE_ROOT
 
 log() {

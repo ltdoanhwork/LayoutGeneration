@@ -39,6 +39,9 @@ export MKL_NUM_THREADS=4
 export NUMEXPR_NUM_THREADS=4
 export OPENBLAS_NUM_THREADS=4
 
+# Add project root to PYTHONPATH to find 'src'
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+
 run_exp() {
     EXP_NAME=$1
     shift

@@ -36,6 +36,9 @@ export MKL_NUM_THREADS=4
 export NUMEXPR_NUM_THREADS=4
 export OPENBLAS_NUM_THREADS=4
 
+# Add project root to PYTHONPATH to find 'src'
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+
 python -m src.pipeline.train_rl_dsn_v11_final \
     --dataset_root "$DATASET" \
     --val_root "$VAL_ROOT" \
