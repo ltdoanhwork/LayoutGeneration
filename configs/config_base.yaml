@@ -31,7 +31,7 @@ bank:
 # =========================================================
 io:
   input_folder: "/home/serverai/ltdoanh/LayoutGeneration/data/FINAL/keyframe/63592/keyframes"
-  output_root: "/home/serverai/ltdoanh/LayoutGeneration/data/FINAL/test/object_free/63592"
+  output_root: "/home/serverai/ltdoanh/LayoutGeneration/data/FINAL/test/object_free_clip/63592"
 
 # =========================================================
 # RUNTIME
