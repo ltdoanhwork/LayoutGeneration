@@ -506,7 +506,7 @@ def main():
     parser.add_argument("--num_attn_layers", type=int, default=2)
     parser.add_argument("--gating_hidden", type=int, default=64, help="Gating network hidden dim")
     parser.add_argument("--lstm_hidden", type=int, default=128, help="LSTM hidden size")
-    parser.add_argument("--attr_suffix", type=str, default="anime_attrs_v11.npy", help="Suffix for attribute file (ablation)")
+    parser.add_argument("--attr_suffix", type=str, default="anime_attrs.npy", help="Suffix for attribute file (ablation)")
     
     args = parser.parse_args()
     set_seed(42)
