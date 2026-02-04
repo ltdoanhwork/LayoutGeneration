@@ -8,35 +8,42 @@
 \textbf{Ablation Setting} & \textbf{MPR} $\uparrow$ & \textbf{Top10} $\uparrow$ & \textbf{RecErr} $\downarrow$ & \textbf{FD} $\downarrow$ & \textbf{TempCov} $\uparrow$ & \textbf{Comp.} $\uparrow$ \\
 \midrule
 \multicolumn{7}{l}{\textbf{1. Reward Design}} \\
-\hspace{3mm} Baseline (Div Only) & 0.696 & 0.455 & 0.0467 & 0.102 & 0.996 & 1.621 \\
-\hspace{3mm} No Diversity & 0.726 & 0.443 & 0.0566 & 0.120 & 0.993 & 1.631 \\
-\hspace{3mm} Strong Diversity & 0.712 & 0.534 & 0.0517 & 0.114 & 0.994 & 1.711 \\
-\hspace{3mm} RecErr Opt & \textbf{0.802} & \textbf{0.655} & 0.0522 & 0.112 & 0.995 & \textbf{1.923} \\
-\hspace{3mm} Fr\'echet Opt & 0.478 & 0.126 & 0.0513 & 0.105 & 0.994 & 1.070 \\
-\hspace{3mm} Combined Rep & 0.749 & 0.502 & 0.0525 & 0.111 & 0.994 & 1.717 \\
+\hspace{3mm} Baseline (Div Only) & 0.719 & 0.558 & 0.0499 & 0.110 & 0.996 & 1.744 \\
+\hspace{3mm} No Diversity & 0.759 & 0.556 & 0.0569 & 0.120 & 0.992 & 1.777 \\
+\hspace{3mm} Strong Diversity & 0.716 & 0.563 & 0.0507 & 0.111 & 0.995 & 1.745 \\
+\hspace{3mm} RecErr Opt & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
+\hspace{3mm} Fréchet Opt & 0.761 & 0.561 & 0.0506 & 0.108 & 0.996 & 1.789 \\
+\hspace{3mm} Combined Rep & 0.762 & 0.522 & \textbf{0.0492} & \textbf{0.106} & \textbf{0.996} & 1.753 \\
 \midrule
 \multicolumn{7}{l}{\textbf{2. Input Signals}} \\
-\hspace{3mm} Visual Features Only & 0.706 & 0.427 & \textbf{0.0452} & \textbf{0.099} & 0.995 & 1.603 \\
-\hspace{3mm} Full (Visual + Aes) & 0.696 & 0.455 & 0.0467 & 0.102 & \textbf{0.996} & 1.621 \\
+\hspace{3mm} Visual Features Only & 0.574 & 0.338 & \textbf{0.0511} & \textbf{0.114} & \textbf{0.996} & 1.379 \\
+\hspace{3mm} Full (Visual + Aes) & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
 \midrule
 \multicolumn{7}{l}{\textbf{3. Architecture}} \\
-\hspace{3mm} No Attention & 0.728 & 0.423 & 0.0428 & 0.091 & 0.995 & 1.622 \\
-\hspace{3mm} Attn 1-Layer & \textbf{0.783} & \textbf{0.556} & 0.0494 & 0.106 & 0.995 & \textbf{1.807} \\
-\hspace{3mm} Attn 2-Layer (Base) & 0.696 & 0.455 & 0.0467 & 0.102 & \textbf{0.996} & 1.621 \\
-\hspace{3mm} Attn 4-Layer & 0.494 & 0.214 & 0.0658 & 0.142 & 0.992 & 1.164 \\
-\hspace{3mm} Gate Small & 0.767 & 0.535 & 0.0499 & 0.107 & \textbf{0.996} & 1.770 \\
-\hspace{3mm} Gate Large & 0.716 & 0.497 & 0.0519 & 0.112 & 0.994 & 1.679 \\
+\hspace{3mm} No Attention & 0.723 & 0.469 & \textbf{0.0437} & \textbf{0.095} & \textbf{0.996} & 1.664 \\
+\hspace{3mm} Attn 1-Layer & 0.794 & 0.607 & 0.0496 & 0.107 & 0.994 & 1.867 \\
+\hspace{3mm} Attn 2-Layer (Base) & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
+\hspace{3mm} Attn 4-Layer & 0.555 & 0.254 & 0.0471 & 0.101 & 0.996 & 1.278 \\
+\hspace{3mm} Gate Small & 0.805 & 0.632 & 0.0537 & 0.113 & 0.994 & 1.902 \\
+\hspace{3mm} Gate Large & 0.742 & 0.579 & 0.0531 & 0.116 & 0.996 & 1.787 \\
 \midrule
 \multicolumn{7}{l}{\textbf{4. RL Budget}} \\
-\hspace{3mm} Budget 10\% & 0.462 & 0.148 & 0.0653 & 0.148 & 0.995 & 1.068 \\
-\hspace{3mm} Budget 15\% & 0.696 & 0.455 & 0.0467 & 0.102 & 0.996 & 1.621 \\
-\hspace{3mm} Budget 25\% & \textbf{0.729} & \textbf{0.741} & \textbf{0.0365} & \textbf{0.075} & \textbf{0.997} & \textbf{1.947} \\
+\hspace{3mm} Budget 10\% & 0.774 & 0.445 & 0.0635 & 0.145 & 0.993 & 1.676 \\
+\hspace{3mm} Budget 15\% & \textbf{0.817} & 0.660 & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
+\hspace{3mm} Budget 25\% & 0.734 & \textbf{0.707} & \textbf{0.0360} & \textbf{0.072} & \textbf{0.996} & 1.917 \\
 \midrule
 \multicolumn{7}{l}{\textbf{5. Entropy Reg.}} \\
-\hspace{3mm} Low Entropy & \textbf{0.790} & \textbf{0.589} & 0.0499 & 0.108 & 0.995 & \textbf{1.846} \\
-\hspace{3mm} High Entropy & 0.471 & 0.150 & 0.0544 & 0.113 & 0.994 & 1.085 \\
+\hspace{3mm} Low Entropy & 0.712 & 0.582 & \textbf{0.0485} & \textbf{0.110} & \textbf{0.996} & 1.762 \\
+\hspace{3mm} High Entropy & \textbf{0.801} & \textbf{0.673} & 0.0551 & 0.118 & 0.995 & \textbf{1.937} \\
+\midrule
+\multicolumn{7}{l}{\textbf{6. Scene Detection}} \\
+\hspace{3mm} PyScene Diverse & 0.807 & 0.592 & 0.0511 & 0.110 & \textbf{0.995} & 1.865 \\
+\hspace{3mm} PyScene Fixed Short & 0.807 & 0.655 & \textbf{0.0486} & \textbf{0.106} & 0.995 & 1.930 \\
+\hspace{3mm} TNv2 Diverse & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
+\hspace{3mm} TNv2 Fixed Long & 0.620 & 0.312 & 0.0882 & 0.171 & 0.992 & 1.376 \\
+\hspace{3mm} TNv2 Fixed Short & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
-\caption{Detailed ablation study on reward shaping, feature configuration, architecture depth, and RL stability settings. (Comp. = Composite Score)}
+\caption{Detailed ablation study on reward shaping, feature configuration, architecture depth, RL stability settings, and scene detection methods. Comp. = Composite Score. Bold indicates best performance in each category.}
 \label{tab:ablation_results}
 \end{table*}
