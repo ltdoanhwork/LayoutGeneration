@@ -1,49 +1,49 @@
 \begin{table*}[t]
 \centering
 \scriptsize
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{3pt}
 \renewcommand{\arraystretch}{1.1}
-\begin{tabular}{@{} l c c c c c c @{}}
+\begin{tabular}{@{} l c c c c c c c @{}}
 \toprule
-\textbf{Ablation Setting} & \textbf{MPR} $\uparrow$ & \textbf{Top10} $\uparrow$ & \textbf{RecErr} $\downarrow$ & \textbf{FD} $\downarrow$ & \textbf{TempCov} $\uparrow$ & \textbf{Comp.} $\uparrow$ \\
+\textbf{Ablation Setting} & \textbf{MPR} $\uparrow$ & \textbf{Top10} $\uparrow$ & \textbf{RecErr} $\downarrow$ & \textbf{FD} $\downarrow$ & \textbf{TempCov} $\uparrow$ & \textbf{LPIPS} $\downarrow$ & \textbf{DISTS} $\downarrow$ \\
 \midrule
-\multicolumn{7}{l}{\textbf{1. Reward Design}} \\
-\hspace{3mm} Baseline (Div Only) & 0.719 & 0.558 & 0.0499 & 0.110 & 0.996 & 1.744 \\
-\hspace{3mm} No Diversity & 0.759 & 0.556 & 0.0569 & 0.120 & 0.992 & 1.777 \\
-\hspace{3mm} Strong Diversity & 0.716 & 0.563 & 0.0507 & 0.111 & 0.995 & 1.745 \\
-\hspace{3mm} RecErr Opt & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
-\hspace{3mm} Fréchet Opt & 0.761 & 0.561 & 0.0506 & 0.108 & 0.996 & 1.789 \\
-\hspace{3mm} Combined Rep & 0.762 & 0.522 & \textbf{0.0492} & \textbf{0.106} & \textbf{0.996} & 1.753 \\
+\multicolumn{8}{l}{\textbf{1. Reward Design}} \\
+\hspace{3mm} Diversity Only & 0.710 & 0.463 & 0.0525 & 0.119 & 3.419 & 0.300 & -- \\
+\hspace{3mm} No Diversity & 0.744 & 0.570 & 0.0574 & 0.125 & 1.770 & 0.279 & -- \\
+\hspace{3mm} Strong Diversity & 0.734 & 0.540 & 0.0536 & 0.121 & 3.725 & 0.260 & -- \\
+\hspace{3mm} Ours (Baseline) & \textbf{0.809} & \textbf{0.577} & 0.0581 & 0.126 & 2.198 & 0.287 & -- \\
+\hspace{3mm} Fréchet Opt & 0.758 & 0.543 & 0.0504 & 0.115 & 2.187 & \textbf{0.243} & -- \\
+\hspace{3mm} Combined Rep & 0.763 & 0.530 & \textbf{0.0491} & \textbf{0.110} & \textbf{3.764} & 0.253 & -- \\
 \midrule
-\multicolumn{7}{l}{\textbf{2. Input Signals}} \\
-\hspace{3mm} Visual Features Only & 0.574 & 0.338 & \textbf{0.0511} & \textbf{0.114} & \textbf{0.996} & 1.379 \\
-\hspace{3mm} Full (Visual + Aes) & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
+\multicolumn{8}{l}{\textbf{2. Input Signals}} \\
+\hspace{3mm} Visual Features Only & 0.562 & 0.337 & \textbf{0.0553} & \textbf{0.124} & \textbf{2.887} & \textbf{0.280} & -- \\
+\hspace{3mm} Full (Visual + Aes) & \textbf{0.809} & \textbf{0.577} & 0.0581 & 0.126 & 2.198 & 0.287 & -- \\
 \midrule
-\multicolumn{7}{l}{\textbf{3. Architecture}} \\
-\hspace{3mm} No Attention & 0.723 & 0.469 & \textbf{0.0437} & \textbf{0.095} & \textbf{0.996} & 1.664 \\
-\hspace{3mm} Attn 1-Layer & 0.794 & 0.607 & 0.0496 & 0.107 & 0.994 & 1.867 \\
-\hspace{3mm} Attn 2-Layer (Base) & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
-\hspace{3mm} Attn 4-Layer & 0.555 & 0.254 & 0.0471 & 0.101 & 0.996 & 1.278 \\
-\hspace{3mm} Gate Small & 0.805 & 0.632 & 0.0537 & 0.113 & 0.994 & 1.902 \\
-\hspace{3mm} Gate Large & 0.742 & 0.579 & 0.0531 & 0.116 & 0.996 & 1.787 \\
+\multicolumn{8}{l}{\textbf{3. Architecture}} \\
+\hspace{3mm} No Attention & 0.732 & 0.480 & \textbf{0.0450} & \textbf{0.102} & \textbf{3.104} & \textbf{0.222} & -- \\
+\hspace{3mm} Attn 1-Layer & \textbf{0.812} & \textbf{0.630} & 0.0549 & 0.123 & 2.761 & 0.277 & -- \\
+\hspace{3mm} Attn 2-Layer (Base) & 0.809 & 0.577 & 0.0581 & 0.126 & 2.198 & 0.287 & -- \\
+\hspace{3mm} Attn 4-Layer & 0.536 & 0.237 & 0.0486 & 0.108 & 2.427 & 0.235 & -- \\
+\hspace{3mm} Gate Small & 0.796 & 0.617 & 0.0584 & 0.126 & 2.264 & 0.282 & -- \\
+\hspace{3mm} Gate Large & 0.760 & 0.600 & 0.0550 & 0.122 & 2.147 & 0.267 & -- \\
 \midrule
-\multicolumn{7}{l}{\textbf{4. RL Budget}} \\
-\hspace{3mm} Budget 10\% & 0.774 & 0.445 & 0.0635 & 0.145 & 0.993 & 1.676 \\
-\hspace{3mm} Budget 15\% & \textbf{0.817} & 0.660 & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
-\hspace{3mm} Budget 25\% & 0.734 & \textbf{0.707} & \textbf{0.0360} & \textbf{0.072} & \textbf{0.996} & 1.917 \\
+\multicolumn{8}{l}{\textbf{4. RL Budget}} \\
+\hspace{3mm} Budget 10\% & 0.739 & 0.480 & 0.0590 & 0.126 & \textbf{3.011} & 0.286 & -- \\
+\hspace{3mm} Budget 15\% & \textbf{0.809} & \textbf{0.577} & 0.0581 & 0.126 & 2.198 & 0.287 & -- \\
+\hspace{3mm} Budget 25\% & 0.795 & 0.533 & \textbf{0.0477} & \textbf{0.108} & 2.613 & \textbf{0.224} & -- \\
 \midrule
-\multicolumn{7}{l}{\textbf{5. Entropy Reg.}} \\
-\hspace{3mm} Low Entropy & 0.712 & 0.582 & \textbf{0.0485} & \textbf{0.110} & \textbf{0.996} & 1.762 \\
-\hspace{3mm} High Entropy & \textbf{0.801} & \textbf{0.673} & 0.0551 & 0.118 & 0.995 & \textbf{1.937} \\
+\multicolumn{8}{l}{\textbf{5. Entropy Reg.}} \\
+\hspace{3mm} Low Entropy & 0.721 & 0.583 & \textbf{0.0534} & \textbf{0.122} & \textbf{5.063} & \textbf{0.263} & -- \\
+\hspace{3mm} High Entropy & \textbf{0.788} & \textbf{0.703} & 0.0605 & 0.133 & 1.557 & 0.288 & -- \\
 \midrule
-\multicolumn{7}{l}{\textbf{6. Scene Detection}} \\
-\hspace{3mm} PyScene Diverse & 0.807 & 0.592 & 0.0511 & 0.110 & \textbf{0.995} & 1.865 \\
-\hspace{3mm} PyScene Fixed Short & 0.807 & 0.655 & \textbf{0.0486} & \textbf{0.106} & 0.995 & 1.930 \\
-\hspace{3mm} TNv2 Diverse & \textbf{0.817} & \textbf{0.660} & 0.0546 & 0.116 & 0.994 & \textbf{1.941} \\
-\hspace{3mm} TNv2 Fixed Long & 0.620 & 0.312 & 0.0882 & 0.171 & 0.992 & 1.376 \\
-\hspace{3mm} TNv2 Fixed Short & -- & -- & -- & -- & -- & -- \\
+\multicolumn{8}{l}{\textbf{6. Scene Detection}} \\
+\hspace{3mm} PyScene Diverse & \textbf{0.822} & \textbf{0.653} & 0.0556 & 0.123 & 2.902 & 0.269 & -- \\
+\hspace{3mm} PyScene Fixed Short & 0.798 & 0.613 & 0.0525 & 0.116 & 3.917 & 0.268 & -- \\
+\hspace{3mm} TNv2 Diverse & 0.809 & 0.577 & 0.0581 & 0.126 & 2.198 & 0.287 & -- \\
+\hspace{3mm} TNv2 Fixed Long & 0.617 & 0.317 & \textbf{0.0475} & \textbf{0.115} & \textbf{4.791} & \textbf{0.254} & -- \\
+\hspace{3mm} TNv2 Fixed Short & -- & -- & -- & -- & -- & -- & -- \\
 \bottomrule
 \end{tabular}
-\caption{Detailed ablation study on reward shaping, feature configuration, architecture depth, RL stability settings, and scene detection methods. Comp. = Composite Score. Bold indicates best performance in each category.}
+\caption{Detailed ablation study. Comp. = Composite Score. Bold indicates best performance in each category. Evaluation on 50-scene subset for consistency with baselines.}
 \label{tab:ablation_results}
 \end{table*}

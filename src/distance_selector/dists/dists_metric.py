@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 import torch
 import numpy as np
+import cv2
 
 from ..interface import DistanceMetric
 from ..registry import register_metric
@@ -36,7 +37,35 @@ class DISTSMetric(DistanceMetric):
         return self._device
 
     def preprocess_bgr(self, bgr: np.ndarray) -> torch.Tensor:
-        return U.bgr_to_tensor_0_1(bgr).to(self._device)
+        """Preprocess BGR image with resizing for memory efficiency."""
+        x = bgr
+        assert x.ndim == 3 and x.shape[2] in (1, 3), f"Expect HxWxC image, got {x.shape}"
+        # Ensure 3 channels
+        if x.shape[2] == 1:
+            x = np.repeat(x, 3, axis=2)
+        
+        # Resize to max 256x256 to prevent OOM in batch processing
+        H, W = x.shape[:2]
+        max_side = 256
+        if max(H, W) > max_side:
+            scale = max_side / float(max(H, W))
+            newH, newW = int(round(H * scale)), int(round(W * scale))
+            x = cv2.resize(x, (newW, newH), interpolation=cv2.INTER_AREA)
+        
+        # Ensure minimum size for DISTS
+        H, W = x.shape[:2]
+        if min(H, W) < 64:
+            scale = 64.0 / min(H, W)
+            newH, newW = int(round(H * scale)), int(round(W * scale))
+            x = cv2.resize(x, (newW, newH), interpolation=cv2.INTER_LINEAR)
+        
+        # BGR -> RGB, [0, 255] -> [0, 1]
+        x = x.astype(np.float32)
+        if x.max() > 1.0:
+            x /= 255.0
+        x = x[..., ::-1]  # BGR -> RGB
+        t = torch.from_numpy(x.transpose(2, 0, 1)).unsqueeze(0).contiguous().to(self._device)
+        return t
 
     @torch.no_grad()
     def pair_distance(self, t1: torch.Tensor, t2: torch.Tensor) -> float:
