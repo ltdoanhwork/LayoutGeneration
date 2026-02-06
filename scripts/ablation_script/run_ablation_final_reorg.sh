@@ -26,7 +26,7 @@ DRY_RUN=${2:-""}
 DATASET_DEFAULT="data/sakuga_dataset_v11_new"
 VAL_ROOT_DEFAULT="data/sakuga_dataset_v11_new_test"
 OUT_ROOT="runs/ablation_final_reorg"
-EPOCHS=50
+EPOCHS=60
 
 mkdir -p $OUT_ROOT
 

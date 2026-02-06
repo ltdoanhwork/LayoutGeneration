@@ -109,7 +109,9 @@ def main():
     print("\\toprule")
     
     # Header
-    headers = [f"\\textbf{{{m[1]}}} {'$\\uparrow$' if m[2]=='max' else '$\\downarrow$'}" for m in METRICS]
+    arrow_up = "$\\uparrow$"
+    arrow_down = "$\\downarrow$"
+    headers = [f"\\textbf{{{m[1]}}} {arrow_up if m[2]=='max' else arrow_down}" for m in METRICS]
     print(f"\\textbf{{Ablation Setting}} & {' & '.join(headers)} \\\\")
     print("\\midrule")
     

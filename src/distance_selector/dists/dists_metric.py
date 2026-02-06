@@ -63,7 +63,7 @@ class DISTSMetric(DistanceMetric):
         x = x.astype(np.float32)
         if x.max() > 1.0:
             x /= 255.0
-        x = x[..., ::-1]  # BGR -> RGB
+        x = x[..., ::-1].copy()  # BGR -> RGB, .copy() fixes negative stride issue
         t = torch.from_numpy(x.transpose(2, 0, 1)).unsqueeze(0).contiguous().to(self._device)
         return t
 
