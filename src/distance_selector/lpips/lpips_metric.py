@@ -51,14 +51,14 @@ class LPIPSMetric(DistanceMetric):
             newH = max(newH, 64); newW = max(newW, 64)
             x = cv2.resize(x, (newW, newH), interpolation=cv2.INTER_AREA)
             H, W = x.shape[:2]
-        if max(H, W) > 1024:
-            scale = 1024.0 / float(max(H, W))
+        if max(H, W) > 256:
+            scale = 256.0 / float(max(H, W))
             x = cv2.resize(x, (int(round(W*scale)), int(round(H*scale))), interpolation=cv2.INTER_AREA)
 
         # BGR->RGB, [0,1] -> [-1,1]
         x = x.astype(np.float32)
         if x.max() > 1.0: x /= 255.0
-        x = x[..., ::-1]
+        x = x[..., ::-1].copy()  # BGR->RGB, .copy() fixes negative stride
         x = (x * 2.0) - 1.0
         t = torch.from_numpy(x.transpose(2,0,1)).unsqueeze(0).contiguous().to(self._device)
         return t

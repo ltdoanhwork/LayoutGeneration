@@ -22,7 +22,7 @@ echo "DEBUG: GPU_ID='$GPU_ID' STAGE='$STAGE'"
 DATA_ROOT="data/sakuga_dataset_v11_new"
 VAL_ROOT="data/sakuga_dataset_v11_new_test"
 SAVE_ROOT="runs/ablation_deep_iqa"
-EPOCHS=50
+EPOCHS=60
 
 export CUDA_VISIBLE_DEVICES=$GPU_ID
 export OMP_NUM_THREADS=4
@@ -80,9 +80,9 @@ if [[ "$STAGE" == "all" || "$STAGE" == "exp" ]]; then
     log "====== STAGE 2: RUNNING EXPERIMENTS ======"
 
     # Common Settings for Fair Comparison
-    # RecErr=1.0 (Standard preservation)
+    # RecErr=0.2 (Baseline V11)
     # Div=0.3 (Standard diversity)
-    SETTINGS="--rec_weight 1.0 --diversity_weight 0.3"
+    SETTINGS="--rec_weight 0.2 --diversity_weight 0.3"
 
     # ------------------------------------------------------------------------
     # GROUP 1: Prompt Sensitivity (Fix Method=Combined, Vary Prompts)
