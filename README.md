@@ -1,179 +1,92 @@
-# LayoutGeneration
+# Anime Layout Generation 🎬✨
 
-🎬 **Unified Scene Detection + Keyframe Selection Pipeline**
+A unified framework for **Anime Video Summarization** and **Manga-Style Layout Generation**. This project implements a sophisticated pipeline that detects scenes, selects keyframes using Reinforcement Learning (RL) or LLM-based methods, and composes them into aesthetically pleasing layouts (Voronoi SoftCollage or Rectangular Grids).
 
-A modular, production-ready pipeline for automatic keyframe extraction from videos using pluggable scene detection backends (PySceneDetect, TransNetV2) and distance metrics (LPIPS, DISTS).
-
----
-
-## ✨ Features
-
-- **🔍 Multiple Scene Detectors**
-  - PySceneDetect (fast, CPU-based)
-  - TransNetV2 (deep learning, GPU-accelerated)
-
-- **📏 Distance Metrics**
-  - LPIPS (perceptual loss)
-  - DISTS (deep image similarity)
-
-- **✂️ Keyframe Selection Strategies**
-  - Medoid selection (optimal representatives)
-  - Random sampling
-
-- **🔄 Post-Processing**
-  - Cosine similarity filtering for duplicate removal
-  - Scene-based normalization and merging
-
-- **📊 Comprehensive Evaluation**
-  - Representativeness, Coverage, Diversity metrics
-  - Image quality assessment (sharpness, exposure, noise)
-  - Comparison with baselines (uniform, middle, motion-peak)
-
-- **⚡ Batch Processing**
-  - Parallel video processing with worker pools
-  - Custom output directory specification
-  - Grid search hyperparameter optimization
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![PyTorch](https://img.shields.io/badge/PyTorch-1.9%2B-orange)
+![TransNetV2](https://img.shields.io/badge/Scene_Detection-TransNetV2-green)
 
 ---
 
-## 📋 Requirements
+## 🌟 Key Features
 
-```
-Python 3.8+
-CUDA 11.0+ (optional, for GPU acceleration)
-```
-
-**Core Dependencies:**
-```
-opencv-python>=4.5.0
-numpy>=1.19.0
-torch>=1.9.0
-torchvision>=0.10.0
-tqdm>=4.62.0
-pandas>=1.3.0
-scenedetect[opencv]>=0.41.0
-```
+- **Advanced Scene Detection**: Utilizes **TransNetV2** for state-of-the-art shot boundary detection in anime videos.
+- **Intelligent Keyframe Selection**:
+  - **V11 (Proposed)**: Deep Summarization Network (DSN) trained with **RL and Lagrangian Constraints** to balance Representativeness, Diversity, and Aesthetic Quality.
+  - **LLMVS**: LLM-based Video Summarization using Llama-2 embeddings for semantic understanding.
+  - **VSUMM**: Standard visual summarization baseline.
+- **Dynamic Layout Generation**:
+  - **SoftCollage**: Organic, Voronoi-based layouts that adapt to image content.
+  - **Grid Layout**: Clean, rectangular panel layouts optimizing screen space.
+  - **Temporal Coherence**: Maintains story flow by clustering temporally adjacent frames.
+- **Aesthetic Quality Assessment**: Integrated "Anime Attributes" scoring (Sharpness, Noise, Exposure, Colorfulness).
 
 ---
 
-## 🚀 Quick Start
+## 🛠️ Installation
 
-### Installation
+### Prerequisites
+- Linux / macOS
+- Python 3.8+
+- CUDA-compatible GPU (Recommended)
+
+### Setup
 
 ```bash
-# Clone repository
+# Clone the repository
 git clone https://github.com/ltdoanh2004/LayoutGeneration.git
 cd LayoutGeneration
 
-# Create conda environment
-conda create -n layout python=3.10
-conda activate layout
+# Create a virtual environment (optional but recommended)
+conda create -n layout_gen python=3.10
+conda activate layout_gen
 
 # Install dependencies
 pip install -r requirements.txt
 ```
 
-### Basic Usage
-**! Run train optimizer for choosing parameter for pipeline**
-```bash
-python pipeline/train_optimizer.py \
-  --samples_dir "data/samples/Sakuga" \
-  --pipeline_script "scripts/pipeline_keyframes.py" \
-  --param_config_json "configs/optimizer_grid.json" \
-  --out_dir "outputs/optimizer_out" \
-  --model_dir "src/models/TransNetV2" \
-  --eval_backbone "resnet50" \
-  --eval_device "cuda" \
-  --max_videos 5 \
-  --distance_backend dists \
-  --dists_as_distance 1
-```
-**1️⃣ Single Video Processing**
+> **Note**: This project relies on `repos/Colla` for the SoftCollage layout engine. Ensure the submodule is initialized if applicable, or the code is present in `repos/Colla`.
+
+---
+
+## 🚀 Usage
+
+### 1. Single Video Comparison (V11 vs VSUMM)
+Run a quick demo to compare the proposed V11 model against the VSUMM baseline on a single video.
 
 ```bash
-# TransNetV2 + LPIPS
-python pipeline.py \
-  --video data/samples/Sakuga/42853.mp4 \
-  --backend transnetv2  \
-  --model_dir src/models/TransNetV2 \
-  --prob_threshold 0.5 \
-  --distance_backend lpips --lpips_net alex \
-  --sample_stride 5 --max_frames_per_scene 40 \
-  --keyframes_per_scene 1 --nms_radius 2 \
-  --resize_w 320 --resize_h 180 \
-  --out_dir data/outputs/Dang/check/run_tv2_lpips
-```
-```bash
-python pipeline.py \
-  --video data/samples/Sakuga/42853.mp4 \
-  --backend transnetv2  \
-  --model_dir src/models/TransNetV2 \
-  --prob_threshold 0.5 \
-  --distance_backend dists --dists_as_distance 1 \
-  --sample_stride 5 --max_frames_per_scene 40 \
-  --keyframes_per_scene 1 --nms_radius 2 \
-  --resize_w 320 --resize_h 270 \
-  --out_dir data/outputs/Dang/check/run_tv2_dists
+python scripts/demo_single_video.py \
+  --video data/samples/Sakuga/13926.mp4 \
+  --budget_ratio 0.1 \
+  --output demo_results.json \
+  --output_dir demo_vis \
+  --stride 5
 ```
 
-**2️⃣ Evaluate Results**
+### 2. Full Layout Generation Pipeline
+Generate a complete layout (Keyframes -> Layout) for a video.
 
 ```bash
-python scipts/eval_keyframes.py \
-  --video samples/vssum/v11.mp4 \
-  --scenes_json outputs/run_tv2_lpips_v11/scenes.json \
-  --keyframes_csv outputs/run_tv2_lpips_v11/keyframes.csv \
-  --out_dir outputs/eval_tv2_lpips_v11 \
-  --backbone resnet50 \
-  --device cuda \
-  --sample_stride 1 \
-  --max_frames_eval 200 \
-  --tau 0.5 \
-  --with_baselines
+# Standard Voronoi Layout
+python layout_decomposer_final.py \
+  --video data/samples/Sakuga/13926.mp4 \
+  --out_dir outputs/layout_result \
+  --backend transnetv2 \
+  --no_grid_layout
+
+# Rectangular Grid Layout
+python layout_decomposer_final.py \
+  --video data/samples/Sakuga/13926.mp4 \
+  --out_dir outputs/grid_result \
+  --use_grid_layout
 ```
 
-**3️⃣ Batch Processing Multiple Videos**
+### 3. Training V11 (RL with Constraints)
+Train the V11 model using the Lagrangian Constrained Optimization approach.
 
 ```bash
-python batch_processing.py \
-  --run_pipeline \
-  --run_evalviz \
-  --data_folder samples \
-  --distance_backend lpips \
-  --prob_threshold 0.5 \
-  --sample_stride 5 \
-  --nms_radius 2 \
-  --resize_w 320 --resize_h 270 \
-  --pipeline_out_dir outputs/pipeline \
-  --eval_out_dir outputs/eval \
-  --num_workers 4
-```
-
-**4️⃣ Hyperparameter Optimization**
-
-```bash
-python -m pipeline.train_optimizer \
-  --samples_dir samples \
-  --pipeline_script pipeline.py \
-  --model_dir src/models/TransNetV2 \
-  --param_config_json pipeline/config/optimizer_grid.json \
-  --out_dir outputs/optimizer_results_dists \
-  --distance_backend dists \
-  --dists_as_distance 1 \
-  --eval_backbone resnet50 \
-  --eval_device cuda \
-  --max_videos 2 \
-  --early_stopping_patience 5
-```
-
-**5️⃣ Quality Analysis**
-
-```bash
-python outputs/outputs_eval/Evaluation_All.py \
-  --eval_dir outputs_eval \
-  --output_report quality_report.txt \
-  --output_json detailed_results.json \
-  --output_csv summary_results.csv
+# Updates model to satisfy RecErr < 0.35 while maximizing aesthetic reward
+./scripts/run_v11_constrained.sh 0  # 0 is the GPU ID
 ```
 
 ---
@@ -182,274 +95,66 @@ python outputs/outputs_eval/Evaluation_All.py \
 
 ```
 LayoutGeneration/
-├── src/                          # Core modules
-│   ├── scene_detection/          # Scene detectors (PySceneDetect, TransNetV2)
-│   ├── distance_selector/        # Distance metrics (LPIPS, DISTS)
-│   ├── keyframe/                 # Keyframe selectors (Medoid, Random)
-│   ├── models/                   # Pre-trained models
-│   ├── evaluation/               # Evaluation & metrics
-│   └── utils/                    # Utilities (video I/O, timecode, etc.)
-│
-├── pipeline/                     # Pipeline code and configs
-│   ├── pipeline_new.py           # Main pipeline (with cosine filtering)
-│   ├── train_optimizer.py        # Hyperparameter optimization
-│   └── config/
-│       └── optimizer_grid.json   # Hyperparameter grid
-│
-├── eval/                         # Evaluation modules
-│   ├── evaluator.py
-│   ├── metrics.py
-│   └── visualize/
-│
-├── scripts/                      # CLI entry points
-│   ├── pipeline.py               # Pipeline wrapper
-│   ├── batch_processing.py       # Batch video processing
-│   ├── eval_keyframes.py         # Evaluation script
-│   └── scene_detection_pipeline.py
-│
-├── examples/                     # Example scripts
-│   ├── grid_layout.py
-│   ├── keyframe.py
-│   └── summary_metrics.py
-│
-├── data/                         # Data folder (videos, results)
-│   ├── samples/                  # Sample videos
-│   └── outputs/                  # Results
-│
-├── requirements.txt              # Dependencies
-└── README.md                     # This file
+├── src/                        # Core source code
+│   ├── models/                 # V11, DSN, TransNetV2 definitions
+│   ├── scene_detection/        # Detection backends (TransNetV2, PySceneDetect)
+│   ├── scoring/                # Scoring metrics (CLIP, IQA, Temporal)
+│   └── pipeline/               # Training pipelines (RL, Lagrangian)
+├── scripts/                    # Utility scripts and demos
+│   ├── demo_single_video.py    # V11 vs VSUMM comparison
+│   └── run_v11_constrained.sh  # Training script for V11
+├── layout_decomposer_final.py  # Main entry point for layout generation
+├── temporal_layout_composer_unified.py # Unified layout logic
+├── ablation/                   # Ablation studies and baselines
+│   ├── LLMVS/                  # LLM-based summarization model
+│   └── pytorch-vsumm-reinforce # VSUMM baseline
+├── repos/                      # External repositories
+│   └── Colla/                  # SoftCollage implementation
+└── data/                       # Datasets and samples
 ```
 
 ---
 
-## 🔧 Configuration
+## � Models & Methods
 
-### Scene Detection Backends
+### V11: Constrained RL Summarization
+Proposed method that treats video summarization as a **Constrained Markov Decision Process (CMDP)**.
+- **Objective**: Maximize Aesthetic Quality ($Q_{anm}$) and Diversity.
+- **Constraints**: Reconstruction Error ($RecErr < \epsilon$) and Coverage.
+- **Training**: Uses PPO with Lagrangian multipliers to dynamically adjust reward weights.
 
-**PySceneDetect**
-```bash
---backend pyscenedetect \
---threshold 27.0
-```
+### LLMVS (Ablation)
+Uses **Llama-2** embeddings to capture high-level semantic info.
+- **Architecture**: Transformer Encoder + MLP Head on top of Llama embeddings.
+- **Input**: User prompt embedding + Video generation embedding.
 
-**TransNetV2**
-```bash
---backend transnetv2 \
---model_dir src/models/TransNetV2 \
---prob_threshold 0.5 \
---scene_device cuda
-```
-
-### Distance Metrics
-
-**LPIPS (Perceptual Loss)**
-```bash
---distance_backend lpips \
---lpips_net alex              # alex | vgg | squeeze
-```
-
-**DISTS (Deep Image Similarity)**
-```bash
---distance_backend dists \
---dists_as_distance 1         # 1 = use as distance, 0 = as similarity
-```
-
-### Keyframe Selection Parameters
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `--sample_stride` | 10 | Sample every N frames within scene |
-| `--max_frames_per_scene` | 30 | Max frames to consider per scene |
-| `--keyframes_per_scene` | 1 | Number of keyframes per scene |
-| `--nms_radius` | 3 | NMS radius for multiple keyframes |
-| `--resize_w`, `--resize_h` | 320, 180 | Frame resize for distance computation |
-
-### Post-Processing
-
-**Duplicate Keyframe Filtering**
-```bash
---filter_duplicate_keyframes \
---cosine_similarity_threshold 0.9    # 0-1, higher = stricter filtering
-```
+### Layout Engine
+- **Hierarchical Slicing**: Decomposes the canvas into a binary tree of panels.
+- **Optimization**: Uses Simulated Annealing (SAS) to optimize panel shapes and positions based on image content and saliency.
 
 ---
 
-## 📊 Outputs
+## � Evaluation & Metrics
 
-### Pipeline Outputs
-
-```
-outputs/run_tv2_lpips_v11/
-├── scenes.json                  # Scene boundaries and metadata
-├── scenes.csv
-├── keyframes.csv                # Selected keyframe indices
-└── keyframes/                   # Exported keyframe images
-    ├── scene_0000_frame_00000042.jpg
-    ├── scene_0001_frame_00000123.jpg
-    └── ...
-```
-
-### Evaluation Outputs
-
-```
-outputs/eval_tv2_lpips_v11/
-├── eval_results.json            # Evaluation metrics
-├── eval_results.csv
-└── visualizations/              # (optional)
-    ├── distance_matrix.png
-    └── keyframe_grid.jpg
-```
-
-### Quality Report
-
-```
-quality_report.txt              # Human-readable report
-detailed_results.json           # All metrics in JSON
-summary_results.csv            # CSV for spreadsheet analysis
-```
+The project uses a comprehensive set of metrics:
+- **RecErr**: Reconstruction Error (pixel-level representativeness).
+- **Frechet Distance**: Feature-level distribution similarity.
+- **Coverage**: Temporal coverage of scenes.
+- **Diversity**: Dissimilarity among selected keyframes.
+- **MPR (Mean Percentile Rank)**: Aesthetic quality ranking relative to the full video.
 
 ---
 
-## 🎯 Common Workflows
+## � License
 
-### Workflow 1: Quick Test
-```bash
-# Test pipeline on one video
-python pipeline.py \
-  --video samples/v1.mp4 \
-  --backend pyscenedetect \
-  --distance_backend lpips \
-  --out_dir outputs/test
-
-# Evaluate it
-python eval_keyframes.py \
-  --video samples/v1.mp4 \
-  --scenes_json outputs/test_v1/scenes.json \
-  --keyframes_csv outputs/test_v1/keyframes.csv \
-  --out_dir outputs/eval_test
-```
-
-### Workflow 2: Compare Backends (LPIPS vs DISTS)
-```bash
-# Run with LPIPS
-python batch_processing.py \
-  --data_folder samples \
-  --distance_backend lpips \
-  --num_workers 4 \
-  --pipeline_out_dir outputs/lpips/pipeline \
-  --eval_out_dir outputs/lpips/eval
-
-# Run with DISTS
-python batch_processing.py \
-  --data_folder samples \
-  --distance_backend dists \
-  --num_workers 4 \
-  --pipeline_out_dir outputs/dists/pipeline \
-  --eval_out_dir outputs/dists/eval
-
-# Analyze quality
-python outputs/outputs_eval/Evaluation_All.py
-```
-
-### Workflow 3: Optimize Hyperparameters
-```bash
-# Grid search with early stopping
-python -m pipeline.train_optimizer \
-  --samples_dir samples \
-  --distance_backend dists \
-  --early_stopping_patience 5 \
-  --max_videos 2
-
-# Use best params for batch processing
-python batch_processing.py \
-  --prob_threshold 0.5 \
-  --sample_stride 5 \
-  --nms_radius 2 \
-  --resize_w 320 \
-  --resize_h 270 \
-  --num_workers 4
-```
-
----
-
-## 📈 Evaluation Metrics
-
-### Representativeness (30% weight)
-- **RecErr**: Reconstruction error (lower is better)
-- **Frechet**: Frechet distance to full video (lower is better)
-
-### Coverage (30% weight)
-- **SceneCoverage**: Scene coverage ratio (higher is better)
-- **TemporalCoverage@tau**: Temporal coverage with threshold (higher is better)
-
-### Diversity (20% weight)
-- **RedundancyMeanCos**: Mean cosine similarity (lower is better)
-- **MinPairwiseDist**: Minimum pairwise distance (higher is better)
-
-### Image Quality (20% weight)
-- **Sharpness_med**: Median sharpness (higher is better)
-- **Exposure_med**: Median exposure level (optimal: 88-168)
-- **Noise_med**: Median noise level (lower is better)
-
----
-
-## 🐛 Troubleshooting
-
-**Q: GPU memory error**
-```bash
-# Reduce batch size or frame samples
---batch_pairs 8 \
---max_frames_per_scene 20 \
---distance_device cpu  # Use CPU instead
-```
-
-**Q: TransNetV2 model not found**
-```bash
-# Ensure model_dir exists and has weights/
-ls src/models/TransNetV2/weights/
-# Should contain: transnetv2.pth or similar
-```
-
-**Q: Slow evaluation**
-```bash
-# Reduce evaluation frames
---sample_stride 15 \
---max_frames_eval 100
-```
-
-**Q: Pipeline outputs not in expected location**
-```bash
-# Pipeline auto-appends video name to --out_dir
-# If --out_dir is "outputs/test"
-# Actual output is "outputs/test_videoname"
-```
-
----
-
-## 📚 References
-
-- **TransNetV2**: [Paper](https://arxiv.org/abs/2003.13678)
-- **LPIPS**: [Paper](https://arxiv.org/abs/1801.03924)
-- **DISTS**: [Paper](https://arxiv.org/abs/2104.02935)
-- **PySceneDetect**: [GitHub](https://github.com/Breakthrough/PySceneDetect)
-
----
-
-## 📄 License
-
-MIT License
-
----
+[MIT License](LICENSE)
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit issues and pull requests.
+Contributions are welcome! Please open an issue or submit a pull request for improvements.
 
 ---
 
-## 📞 Contact & Support
+## 📞 Contact
 
-For issues, questions, or suggestions, please open an issue on GitHub.
-
-
- python -m scripts.precompute_script.prepare_rl_dataset_v11 --video_dir data/samples/Sakuga --out_dir data/sakuga_dataset_v11_new --backend transnetv2 --model_dir src/models/TransNetV2 --min_scene_len 30 --max_scene_len 500 --device cuda
+For questions or support, please open an issue in the repository.
