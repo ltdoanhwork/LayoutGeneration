@@ -96,5 +96,10 @@ run_prep "pyscene_div" "pyscenedetect" 30 500 ""
 # ============================================================
 run_prep "pyscene_short" "pyscenedetect" 30 100 "--force_split"
 
+# ============================================================
+# 5. PySceneDetect Fixed Long
+# ============================================================
+run_prep "pyscene_long" "pyscenedetect" 150 300 "--force_split"
+
 echo ""
 echo "All Datasets Prepared!"
