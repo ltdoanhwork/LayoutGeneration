@@ -49,11 +49,11 @@ EXPERIMENTS = {
         ("6_tnv2_fixed_short", "TNv2 Fixed Short", ABLATION_REORG),
     ],
     "7. Prompt Count": [
-        ("G1_prompt_1pair", "1-Pair", ABLATION_DEEP),
-        ("G1_prompt_2pair", "2-Pair", ABLATION_DEEP),
-        ("G1_prompt_3pair", "3-Pair (Baseline)", ABLATION_DEEP),
-        ("G1_prompt_4pair", "4-Pair", ABLATION_DEEP),
-        ("G1_prompt_5pair", "5-Pair (Full)", ABLATION_DEEP),
+        ("G1_prompt_1pair", "1-Pair", ABLATION_REORG),
+        ("G1_prompt_2pair", "2-Pair", ABLATION_REORG),
+        ("G1_prompt_3pair", "3-Pair (Baseline)", ABLATION_REORG),
+        ("G1_prompt_4pair", "4-Pair", ABLATION_REORG),
+        ("G1_prompt_5pair", "5-Pair (Full)", ABLATION_REORG),
     ],
 }
 
