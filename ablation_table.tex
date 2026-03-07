@@ -8,49 +8,50 @@
 \textbf{Ablation Setting} & \textbf{MPR} $\uparrow$ & \textbf{Top10} $\uparrow$ & \textbf{RecErr} $\downarrow$ & \textbf{FD} $\downarrow$ & \textbf{TempCov} $\uparrow$ & \textbf{LPIPS} $\downarrow$ & \textbf{DISTS} $\downarrow$ \\
 \midrule
 \multicolumn{8}{l}{\textbf{1. Reward Design}} \\
-\hspace{3mm} Diversity Only & 0.710 & 0.463 & 0.0525 & 0.118 & 3.42 & 0.255 & 0.156 \\
+\hspace{3mm} Diversity Only & 0.750 & 0.540 & 0.0548 & 0.117 & 2.77 & 0.263 & 0.157 \\
 \hspace{3mm} No Diversity & 0.744 & 0.570 & 0.0574 & 0.125 & 1.77 & 0.272 & 0.163 \\
 \hspace{3mm} Strong Diversity & 0.734 & 0.540 & 0.0536 & 0.121 & 3.73 & 0.260 & 0.156 \\
-\hspace{3mm} Ours (Baseline) & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
+\rowcolor{gray!15} \hspace{3mm} Ours (Baseline) & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
 \hspace{3mm} Fréchet Opt & 0.758 & 0.543 & 0.0504 & 0.115 & 2.19 & \textbf{0.241} & \textbf{0.150} \\
 \hspace{3mm} Combined Rep & 0.763 & 0.530 & \textbf{0.0491} & \textbf{0.110} & \textbf{3.76} & 0.253 & 0.153 \\
 \midrule
 \multicolumn{8}{l}{\textbf{2. Input Signals}} \\
 \hspace{3mm} Visual Features Only & 0.562 & 0.337 & \textbf{0.0553} & \textbf{0.124} & \textbf{2.89} & \textbf{0.259} & \textbf{0.157} \\
-\hspace{3mm} Full (Visual + Aes) & \textbf{0.809} & \textbf{0.577} & 0.0581 & 0.126 & 2.20 & 0.283 & 0.168 \\
+\hspace{3mm} Full (Visual + Aes) & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
 \midrule
 \multicolumn{8}{l}{\textbf{3. Architecture}} \\
-\hspace{3mm} No Attention & 0.732 & 0.480 & \textbf{0.0450} & \textbf{0.102} & \textbf{3.10} & \textbf{0.227} & \textbf{0.141} \\
-\hspace{3mm} Attn 1-Layer & \textbf{0.812} & \textbf{0.630} & 0.0549 & 0.123 & 2.76 & 0.259 & 0.158 \\
-\hspace{3mm} Attn 2-Layer (Base) & 0.809 & 0.577 & 0.0581 & 0.126 & 2.20 & 0.283 & 0.168 \\
+\hspace{3mm} No Attention & 0.737 & 0.533 & \textbf{0.0455} & \textbf{0.101} & \textbf{3.41} & \textbf{0.231} & \textbf{0.143} \\
+\hspace{3mm} Attn 1-Layer & 0.812 & 0.630 & 0.0549 & 0.123 & 2.76 & 0.259 & 0.158 \\
+\hspace{3mm} Attn 2-Layer (Base) & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
 \hspace{3mm} Attn 4-Layer & 0.536 & 0.237 & 0.0486 & 0.108 & 2.43 & 0.248 & 0.151 \\
 \hspace{3mm} Gate Small & 0.796 & 0.617 & 0.0584 & 0.126 & 2.26 & 0.266 & 0.163 \\
 \hspace{3mm} Gate Large & 0.760 & 0.600 & 0.0550 & 0.122 & 2.15 & 0.262 & 0.159 \\
 \midrule
 \multicolumn{8}{l}{\textbf{4. RL Budget}} \\
-\hspace{3mm} Budget 10\% & 0.739 & 0.480 & 0.0590 & 0.126 & \textbf{3.01} & 0.276 & 0.167 \\
-\hspace{3mm} Budget 15\% & \textbf{0.809} & \textbf{0.577} & 0.0581 & 0.126 & 2.20 & 0.283 & 0.168 \\
-\hspace{3mm} Budget 25\% & 0.795 & 0.533 & \textbf{0.0477} & \textbf{0.108} & 2.61 & \textbf{0.239} & \textbf{0.148} \\
+\hspace{3mm} Budget 10% & 0.739 & 0.480 & 0.0590 & 0.126 & \textbf{3.01} & 0.276 & 0.167 \\
+\hspace{3mm} Budget 15% & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
+\hspace{3mm} Budget 25% & 0.795 & 0.533 & \textbf{0.0477} & \textbf{0.108} & 2.61 & \textbf{0.239} & \textbf{0.148} \\
 \midrule
 \multicolumn{8}{l}{\textbf{5. Entropy Reg.}} \\
-\hspace{3mm} Low Entropy & 0.721 & 0.583 & \textbf{0.0534} & \textbf{0.122} & \textbf{5.06} & \textbf{0.251} & \textbf{0.154} \\
-\hspace{3mm} High Entropy & \textbf{0.788} & \textbf{0.703} & 0.0605 & 0.133 & 1.56 & 0.276 & 0.168 \\
+\hspace{3mm} Low Entropy & 0.759 & 0.540 & \textbf{0.0534} & \textbf{0.120} & \textbf{4.12} & \textbf{0.254} & \textbf{0.155} \\
+\hspace{3mm} High Entropy & \textbf{0.823} & \textbf{0.707} & 0.0575 & 0.125 & 2.92 & 0.270 & 0.160 \\
 \midrule
 \multicolumn{8}{l}{\textbf{6. Scene Detection}} \\
-\hspace{3mm} PyScene Diverse & \textbf{0.822} & \textbf{0.653} & 0.0556 & 0.123 & 2.90 & 0.257 & 0.158 \\
+\hspace{3mm} PyScene Diverse & \textbf{0.827} & 0.630 & 0.0530 & 0.120 & 3.82 & 0.257 & 0.157 \\
 \hspace{3mm} PyScene Fixed Short & 0.798 & 0.613 & 0.0525 & 0.116 & 3.92 & 0.256 & 0.156 \\
-\hspace{3mm} TNv2 Diverse & 0.809 & 0.577 & 0.0581 & 0.126 & 2.20 & 0.283 & 0.168 \\
-\hspace{3mm} TNv2 Fixed Long & 0.617 & 0.317 & \textbf{0.0475} & \textbf{0.115} & \textbf{4.79} & \textbf{0.254} & \textbf{0.151} \\
-\hspace{3mm} TNv2 Fixed Short & -- & -- & -- & -- & -- & -- & -- \\
+\hspace{3mm} PyScene Fixed Long & 0.726 & 0.413 & 0.0562 & 0.123 & 1.58 & 0.265 & 0.162 \\
+\rowcolor{gray!15} \hspace{3mm} TNv2 Diverse \textsuperscript{$\star$} & 0.820 & \textbf{0.660} & 0.0569 & 0.124 & 2.74 & 0.269 & 0.163 \\
+\hspace{3mm} TNv2 Fixed Long & 0.617 & 0.317 & \textbf{0.0475} & \textbf{0.115} & \textbf{4.79} & 0.254 & 0.151 \\
+\hspace{3mm} TNv2 Fixed Short & 0.811 & 0.573 & 0.0504 & 0.115 & 3.57 & \textbf{0.240} & \textbf{0.149} \\
 \midrule
 \multicolumn{8}{l}{\textbf{7. Prompt Count}} \\
-\hspace{3mm} 1-Pair & 0.752 & 0.507 & 0.0590 & 0.130 & 1.98 & 0.278 & 0.168 \\
-\hspace{3mm} 2-Pair & 0.732 & 0.493 & 0.0606 & 0.129 & 1.14 & 0.284 & 0.172 \\
-\hspace{3mm} 3-Pair (Baseline) & 0.742 & 0.513 & 0.0527 & 0.115 & 1.99 & 0.262 & 0.158 \\
-\hspace{3mm} 4-Pair & 0.761 & 0.507 & \textbf{0.0504} & \textbf{0.112} & \textbf{2.14} & \textbf{0.248} & \textbf{0.153} \\
-\hspace{3mm} 5-Pair (Full) & \textbf{0.769} & \textbf{0.550} & 0.0600 & 0.130 & 2.03 & 0.270 & 0.165 \\
+\hspace{3mm} 1-Pair & 0.813 & 0.620 & 0.0621 & 0.133 & 2.18 & 0.282 & 0.168 \\
+\hspace{3mm} 2-Pair & 0.793 & 0.623 & 0.0572 & 0.122 & 1.40 & 0.269 & 0.164 \\
+\rowcolor{gray!15} \hspace{3mm} 3-Pair (Baseline) & \textbf{0.820} & \textbf{0.660} & 0.0569 & 0.124 & \textbf{2.74} & 0.269 & 0.163 \\
+\hspace{3mm} 4-Pair & 0.773 & 0.567 & \textbf{0.0532} & \textbf{0.116} & 2.34 & 0.252 & \textbf{0.156} \\
+\hspace{3mm} 5-Pair (Full) & 0.755 & 0.540 & 0.0536 & 0.116 & 2.24 & \textbf{0.251} & 0.156 \\
 \bottomrule
 \end{tabular}
-\caption{Detailed ablation study. Bold indicates best performance in each category. Evaluation on 50-scene subset for consistency with baselines.}
+\caption{Ablation study with mean metrics (evaluated on 50-scene subset). Bold indicates best in category.}
 \label{tab:ablation_results}
 \end{table*}

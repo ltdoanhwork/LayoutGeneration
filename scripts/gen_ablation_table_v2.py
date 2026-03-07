@@ -44,14 +44,15 @@ EXPERIMENTS = {
     "6. Scene Detection": [
         ("6_pyscene_diverse", "PyScene Diverse", ABLATION_REORG),
         ("6_pyscene_fixed_short", "PyScene Fixed Short", ABLATION_REORG),
-        ("6_tnv2_diverse", "TNv2 Diverse", ABLATION_REORG),
+        ("6_pyscene_fixed_long", "PyScene Fixed Long", ABLATION_REORG),
+        ("6_tnv2_diverse", "TNv2 Diverse \\textsuperscript{$\\star$}", ABLATION_REORG),
         ("6_tnv2_fixed_long", "TNv2 Fixed Long", ABLATION_REORG),
         ("6_tnv2_fixed_short", "TNv2 Fixed Short", ABLATION_REORG),
     ],
     "7. Prompt Count": [
         ("G1_prompt_1pair", "1-Pair", ABLATION_REORG),
         ("G1_prompt_2pair", "2-Pair", ABLATION_REORG),
-        ("G1_prompt_3pair", "3-Pair (Baseline)", ABLATION_REORG),
+        ("training_v11_recerr_w0.2", "3-Pair (Baseline)", BASELINE.parent),
         ("G1_prompt_4pair", "4-Pair", ABLATION_REORG),
         ("G1_prompt_5pair", "5-Pair (Full)", ABLATION_REORG),
     ],
@@ -139,6 +140,9 @@ def main():
         
         # Print rows
         for exp_name, display_name, m in cat_data:
+            # Highlight the chosen baseline config
+            is_chosen = (exp_name == "training_v11_recerr_w0.2" or 
+                         (exp_name == "6_tnv2_diverse"))
             row = [f"\\hspace{{3mm}} {display_name}"]
             
             if m:
@@ -150,7 +154,10 @@ def main():
             else:
                 row.extend(["--"] * len(METRICS))
             
-            print(" & ".join(row) + " \\\\")
+            line = " & ".join(row) + " \\\\"
+            if is_chosen:
+                line = "\\rowcolor{gray!15} " + line
+            print(line)
         
         # Separator between groups (except last)
         if category != "7. Prompt Count":
