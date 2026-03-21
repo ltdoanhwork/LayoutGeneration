@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isnet-detector"
+version = "0.1.0"
+description = "ISNet-based foreground object detector for anime/illustration frames"
+requires-python = ">=3.8"
+dependencies = [
+    "torch",
+    "torchvision",
+    "numpy",
+    "opencv-python",
+    "pillow",
+    "pytorch-lightning",
+    "huggingface_hub>=0.22",
+    "timm",
+    "kornia",
+]
+
+[project.scripts]
+isnet-detect = "isnet_detector.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["isnet_detector*"]

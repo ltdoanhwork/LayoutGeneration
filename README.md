@@ -1,6 +1,6 @@
 # Anime Layout Generation 🎬✨
 
-A unified framework for **Anime Video Summarization** and **Manga-Style Layout Generation**. This project implements a sophisticated pipeline that detects scenes, selects keyframes using Reinforcement Learning (RL) or LLM-based methods, and composes them into aesthetically pleasing layouts (Voronoi SoftCollage or Rectangular Grids).
+A unified framework for **Anime Video Summarization** and **Manga-Style Layout Generation**. This project detects scenes, selects keyframes with the V11 DSN (RL + constraints), and composes **Voronoi** layouts via **CAST**.
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![PyTorch](https://img.shields.io/badge/PyTorch-1.9%2B-orange)
@@ -10,151 +10,104 @@ A unified framework for **Anime Video Summarization** and **Manga-Style Layout G
 
 ## 🌟 Key Features
 
-- **Advanced Scene Detection**: Utilizes **TransNetV2** for state-of-the-art shot boundary detection in anime videos.
-- **Intelligent Keyframe Selection**:
-  - **V11 (Proposed)**: Deep Summarization Network (DSN) trained with **RL and Lagrangian Constraints** to balance Representativeness, Diversity, and Aesthetic Quality.
-  - **LLMVS**: LLM-based Video Summarization using Llama-2 embeddings for semantic understanding.
-  - **VSUMM**: Standard visual summarization baseline.
-- **Dynamic Layout Generation**:
-  - **SoftCollage**: Organic, Voronoi-based layouts that adapt to image content.
-  - **Grid Layout**: Clean, rectangular panel layouts optimizing screen space.
-  - **Temporal Coherence**: Maintains story flow by clustering temporally adjacent frames.
-- **Aesthetic Quality Assessment**: Integrated "Anime Attributes" scoring (Sharpness, Noise, Exposure, Colorfulness).
+- **Scene detection** with TransNetV2; **V11 keyframe selection** (representativeness, diversity, aesthetics).
+- **CAST** layout: Voronoi SoftCollage, optional ISNet masking (`--voronoi-layout --run-isnet`).
 
 ---
 
 ## 🛠️ Installation
 
 ### Prerequisites
+
 - Linux / macOS
 - Python 3.8+
-- CUDA-compatible GPU (Recommended)
+- CUDA-capable GPU (recommended)
 
 ### Setup
 
 ```bash
-# Clone the repository
 git clone https://github.com/ltdoanh2004/LayoutGeneration.git
 cd LayoutGeneration
 
-# Create a virtual environment (optional but recommended)
 conda create -n layout_gen python=3.10
 conda activate layout_gen
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-> **Note**: This project relies on `repos/Colla` for the SoftCollage layout engine. Ensure the submodule is initialized if applicable, or the code is present in `repos/Colla`.
+Install **CAST** dependencies from `CAST/requirements.txt` when running layout (phase 2).
 
 ---
 
-## 🚀 Usage
+## 🚀 Usage — two-phase pipeline
 
-### 1. Single Video Comparison (V11 vs VSUMM)
-Run a quick demo to compare the proposed V11 model against the VSUMM baseline on a single video.
+Run **phase 1** from the repo root (`LayoutGeneration/`). Run **phase 2** after `cd CAST`.
+
+### Phase 1 — Extract keyframes from video
 
 ```bash
-python scripts/demo_single_video.py \
-  --video data/samples/Sakuga/13926.mp4 \
+python3 -m scripts.run_inference_v11 \
+  --video_path /home/serverai/ltdoanh/LayoutGeneration/data/FINAL/t1.mp4 \
+  --checkpoint runs/training_v11_final_new/best.pt \
+  --output_dir /home/serverai/ltdoanh/LayoutGeneration/data/FINAL/keyframe/t1 \
   --budget_ratio 0.1 \
-  --output demo_results.json \
-  --output_dir demo_vis \
-  --stride 5
+  --stride 10 \
+  --save_images \
+  --scene_threshold 0.9 \
+  --min_scene_len 100
 ```
 
-### 2. Full Layout Generation Pipeline
-Generate a complete layout (Keyframes -> Layout) for a video.
+### Phase 2 — Create layout (CAST)
 
 ```bash
-# Standard Voronoi Layout
-python layout_decomposer_final.py \
-  --video data/samples/Sakuga/13926.mp4 \
-  --out_dir outputs/layout_result \
-  --backend transnetv2 \
-  --no_grid_layout
+cd CAST
 
-# Rectangular Grid Layout
-python layout_decomposer_final.py \
-  --video data/samples/Sakuga/13926.mp4 \
-  --out_dir outputs/grid_result \
-  --use_grid_layout
-```
-
-### 3. Training V11 (RL with Constraints)
-Train the V11 model using the Lagrangian Constrained Optimization approach.
-
-```bash
-# Updates model to satisfy RecErr < 0.35 while maximizing aesthetic reward
-./scripts/run_v11_constrained.sh 0  # 0 is the GPU ID
+python run.py \
+  /home/serverai/ltdoanh/LayoutGeneration/data/FINAL/layout/input/nobody_layout.jpg \
+  /home/serverai/ltdoanh/LayoutGeneration/data/FINAL/keyframe/Nobody/Nobody/keyframes_filter \
+  ./tests/output_nobody_new 2 --voronoi-layout --run-isnet
 ```
 
 ---
 
-## 📂 Project Structure
+## 📂 Project structure (high level)
 
 ```
 LayoutGeneration/
-├── src/                        # Core source code
-│   ├── models/                 # V11, DSN, TransNetV2 definitions
-│   ├── scene_detection/        # Detection backends (TransNetV2, PySceneDetect)
-│   ├── scoring/                # Scoring metrics (CLIP, IQA, Temporal)
-│   └── pipeline/               # Training pipelines (RL, Lagrangian)
-├── scripts/                    # Utility scripts and demos
-│   ├── demo_single_video.py    # V11 vs VSUMM comparison
-│   └── run_v11_constrained.sh  # Training script for V11
-├── layout_decomposer_final.py  # Main entry point for layout generation
-├── temporal_layout_composer_unified.py # Unified layout logic
-├── ablation/                   # Ablation studies and baselines
-│   ├── LLMVS/                  # LLM-based summarization model
-│   └── pytorch-vsumm-reinforce # VSUMM baseline
-├── repos/                      # External repositories
-│   └── Colla/                  # SoftCollage implementation
-└── data/                       # Datasets and samples
+├── scripts/
+│   └── run_inference_v11.py   # Phase 1: keyframes + V11 inference
+├── CAST/
+│   └── run.py                 # Phase 2: Voronoi layout
+├── src/                       # Models, scene detection, training code
+├── data/                      # Your videos, keyframes, layout inputs
+└── requirements.txt
 ```
 
 ---
 
-## � Models & Methods
+## 📚 Models & methods
 
-### V11: Constrained RL Summarization
-Proposed method that treats video summarization as a **Constrained Markov Decision Process (CMDP)**.
-- **Objective**: Maximize Aesthetic Quality ($Q_{anm}$) and Diversity.
-- **Constraints**: Reconstruction Error ($RecErr < \epsilon$) and Coverage.
-- **Training**: Uses PPO with Lagrangian multipliers to dynamically adjust reward weights.
-
-### LLMVS (Ablation)
-Uses **Llama-2** embeddings to capture high-level semantic info.
-- **Architecture**: Transformer Encoder + MLP Head on top of Llama embeddings.
-- **Input**: User prompt embedding + Video generation embedding.
-
-### Layout Engine
-- **Hierarchical Slicing**: Decomposes the canvas into a binary tree of panels.
-- **Optimization**: Uses Simulated Annealing (SAS) to optimize panel shapes and positions based on image content and saliency.
+- **V11**: Constrained RL summarization (aesthetic + diversity, reconstruction-style constraints).
+- **CAST**: Hierarchical slicing + optimization for panel layout; Voronoi / ISNet integration via CLI flags.
 
 ---
 
-## � Evaluation & Metrics
+## 📊 Evaluation & metrics
 
-The project uses a comprehensive set of metrics:
-- **RecErr**: Reconstruction Error (pixel-level representativeness).
-- **Frechet Distance**: Feature-level distribution similarity.
-- **Coverage**: Temporal coverage of scenes.
-- **Diversity**: Dissimilarity among selected keyframes.
-- **MPR (Mean Percentile Rank)**: Aesthetic quality ranking relative to the full video.
+Representativeness (e.g. reconstruction error), diversity, temporal coverage, and aesthetic-style scores are used during training and analysis; see paper / code under `src/` for definitions.
 
 ---
 
-## � License
+## 📄 License
 
 [MIT License](LICENSE)
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please open an issue or submit a pull request for improvements.
+Contributions are welcome — open an issue or a pull request.
 
 ---
 
 ## 📞 Contact
 
-For questions or support, please open an issue in the repository.
+For questions, open an issue in the repository.

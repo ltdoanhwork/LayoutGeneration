@@ -15,3 +15,4 @@ scikit-image
 tensorflow_hub
 imscore
 ruptures
+gradio>=4.44,<5
