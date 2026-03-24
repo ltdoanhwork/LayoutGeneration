@@ -41,3 +41,4 @@ output/*
 ./*.pth
 ./*.ckpt
 CAST/tests/*
+FINAL/*
