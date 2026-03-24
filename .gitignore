@@ -42,3 +42,6 @@ output/*
 ./*.ckpt
 CAST/tests/*
 FINAL/*
+FINAL_data/
+CAST/isnet-detector/weights/
+CAST/isnet-detector/isnet_detector.egg-info/
