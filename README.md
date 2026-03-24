@@ -92,6 +92,71 @@ LayoutGeneration/
 
 ---
 
+## 🧠 CAST Optimize Objective (paper-style summary)
+
+In Voronoi mode, CAST optimizes a weighted multi-objective loss:
+
+$$
+\mathcal{L}_{total} = \lambda_{cap}\mathcal{L}_{cap} + \lambda_{asp}\mathcal{L}_{asp} + \lambda_{ov}\mathcal{L}_{ov}
+$$
+
+Current default weights:
+
+$$
+(\lambda_{cap},\lambda_{asp},\lambda_{ov}) = (400, 600, 1500)
+$$
+
+### 1) Capacity loss $\mathcal{L}_{cap}$
+
+Aligns each cell area with target area ratio derived from per-frame bbox area in `summary.json`:
+
+$$
+\mathcal{L}_{cap} = \frac{1}{N}\sum_i (A_i - \hat{A}_i)^2
+$$
+
+This stabilizes global size allocation (large-object frames get larger cells).
+
+### 2) Aspect loss $\mathcal{L}_{asp}$
+
+Aligns cell elongation with target bbox aspect ratio:
+
+$$
+\mathcal{L}_{asp} = \frac{1}{N}\sum_i (\log r_i - \log r_i^*)^2
+$$
+
+Log-space error makes penalties symmetric for over-wide and over-tall distortions.
+
+### 3) Overlap-retention loss $\mathcal{L}_{ov}$
+
+Maximizes normalized overlap between soft cell assignment and bbox prior:
+
+$$
+\mathcal{L}_{ov} = \frac{1}{N}\sum_i (1-o_i)^2
+$$
+
+This is the core content-preservation term, therefore assigned the largest weight.
+
+### Why these lambda values?
+
+1. Semantic retention first: $\lambda_{ov}$ is highest to reduce foreground/object truncation.
+2. Geometric readability second: $\lambda_{asp} > \lambda_{cap}$ because aspect distortion is visually more harmful than mild area drift.
+3. Gradient scale balancing: early iterations are tuned so the three terms are comparable in gradient magnitude, then biased toward retention.
+
+### Practical retuning ranges
+
+- $\lambda_{ov} \in [1000, 2500]$
+- $\lambda_{asp} \in [300, 900]$
+- $\lambda_{cap} \in [200, 800]$
+
+Quick heuristic:
+- Increase $\lambda_{ov}$ if objects are frequently cut.
+- Increase $\lambda_{asp}$ if cells are shape-distorted.
+- Increase $\lambda_{cap}$ if large/small frame size allocation drifts.
+
+For full derivations, implementation context, and caveats (soft-to-hard gap, post-optimization spatial reassignment), see `CAST/PIPELINE_ANALYSIS_VI.md`.
+
+---
+
 ## 📊 Evaluation & metrics
 
 Representativeness (e.g. reconstruction error), diversity, temporal coverage, and aesthetic-style scores are used during training and analysis; see paper / code under `src/` for definitions.

@@ -1064,6 +1064,61 @@ class VoronoiLayoutEngine:
         # bubble-like islands that are not true Voronoi/power cells.
         mask_hr = cv2.resize(self.mask_binary, (rw, rh), interpolation=cv2.INTER_NEAREST)
         label_map[mask_hr < 127] = -1
+
+        # Rescue dead cells: if a label has zero support after optimization,
+        # seed a tiny ownership island near its site so it does not disappear.
+        valid_labels = label_map[label_map >= 0]
+        if valid_labels.size > 0:
+            counts = np.bincount(valid_labels, minlength=self.n)
+        else:
+            counts = np.zeros(self.n, dtype=np.int64)
+        dead_labels = [i for i in range(self.n) if counts[i] == 0]
+
+        if dead_labels:
+            fg = (mask_hr >= 127)
+
+            def _nearest_fg_pixel(start_x, start_y):
+                if fg[start_y, start_x]:
+                    return start_x, start_y
+                max_r = max(rw, rh)
+                r = 8
+                while r <= max_r:
+                    x1 = max(0, start_x - r)
+                    x2 = min(rw, start_x + r + 1)
+                    y1 = max(0, start_y - r)
+                    y2 = min(rh, start_y + r + 1)
+                    patch = fg[y1:y2, x1:x2]
+                    ys, xs = np.where(patch)
+                    if ys.size > 0:
+                        xs_abs = xs + x1
+                        ys_abs = ys + y1
+                        d2 = (xs_abs - start_x) ** 2 + (ys_abs - start_y) ** 2
+                        k = int(np.argmin(d2))
+                        return int(xs_abs[k]), int(ys_abs[k])
+                    r *= 2
+                return None, None
+
+            rescue_radius = max(3, int(round(min(rw, rh) * 0.003)))
+            rescued = 0
+            for label_id in dead_labels:
+                sx = int(round((sites_np[label_id, 0] / max(self.norm_w, 1e-6)) * (rw - 1)))
+                sy = int(round((sites_np[label_id, 1] / max(self.norm_h, 1e-6)) * (rh - 1)))
+                sx = int(np.clip(sx, 0, rw - 1))
+                sy = int(np.clip(sy, 0, rh - 1))
+
+                tx, ty = _nearest_fg_pixel(sx, sy)
+                if tx is None:
+                    continue
+
+                seed = np.zeros((rh, rw), dtype=np.uint8)
+                cv2.circle(seed, (tx, ty), rescue_radius, 255, -1)
+                seed_mask = (seed > 0) & fg
+                if np.any(seed_mask):
+                    label_map[seed_mask] = label_id
+                    rescued += 1
+
+            if rescued > 0:
+                print(f"  [Voronoi] Rescued {rescued}/{len(dead_labels)} dead cells after optimization")
         
         polygons = []
         for i in range(self.n):
@@ -1355,6 +1410,38 @@ class WeightedVoronoiLayout:
         avg_iou = sum(final_iou) / len(final_iou) if final_iou else 0
         if verbose:
             print(f"  [Phase 1] Avg bbox coverage: {avg_iou:.1%}")
+
+        def _gradient_bgr(order_idx, total_items):
+            """Publication-friendly CG gradient (deep blue -> teal -> amber -> orange)."""
+            anchors_rgb = np.array([
+                [25.0, 32.0, 72.0],
+                [32.0, 94.0, 166.0],
+                [46.0, 154.0, 145.0],
+                [170.0, 190.0, 110.0],
+                [240.0, 180.0, 70.0],
+                [203.0, 83.0, 42.0],
+            ], dtype=np.float32)
+
+            if total_items <= 1:
+                t = 0.5
+            else:
+                t = float(order_idx) / float(max(1, total_items - 1))
+
+            # Avoid the darkest/lightest extremes and slightly smooth distribution.
+            t = 0.08 + 0.84 * t
+            t = t ** 0.92
+
+            pos = t * (len(anchors_rgb) - 1)
+            lo = int(np.floor(pos))
+            hi = min(lo + 1, len(anchors_rgb) - 1)
+            a = pos - lo
+            rgb = (1.0 - a) * anchors_rgb[lo] + a * anchors_rgb[hi]
+
+            # Slightly compress saturation to keep colors paper-friendly.
+            luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+            rgb = 0.88 * rgb + 0.12 * luma
+
+            return (int(rgb[2]), int(rgb[1]), int(rgb[0]))
         
         def _save_sites_debug_image(file_name, sites_arr):
             if not debug_dir or sites_arr is None:
@@ -1387,16 +1474,9 @@ class WeightedVoronoiLayout:
                 return
 
             debug_cells = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
-            colors = [
-                (255, 0, 0),
-                (0, 255, 0),
-                (0, 0, 255),
-                (255, 255, 0),
-                (255, 0, 255),
-                (0, 255, 255),
-                (180, 120, 255),
-                (120, 200, 255),
-            ]
+            label_draw_items = []
+            border_draw_items = []
+
             scale = engine.max_dim
 
             cell_to_timeline = None
@@ -1414,23 +1494,52 @@ class WeightedVoronoiLayout:
 
                 if cell_to_timeline:
                     timeline_id = cell_to_timeline.get(i, -1)
-                    color = colors[(timeline_id if timeline_id >= 0 else i) % len(colors)]
-                    label_main = f"{timeline_id}" if timeline_id >= 0 else f"c{i}"
-                    label_sub = f"c{i}" if timeline_id >= 0 else None
+                    if timeline_id >= 0:
+                        color = _gradient_bgr(timeline_id, len(assignment_idx))
+                        label_main = str(timeline_id + 1)
+                    else:
+                        color = _gradient_bgr(i, len(cells))
+                        label_main = str(i + 1)
                 else:
-                    color = colors[i % len(colors)]
-                    label_main = f"c{i}"
-                    label_sub = None
+                    color = _gradient_bgr(i, len(cells))
+                    label_main = str(i + 1)
 
                 cv2.fillPoly(debug_cells, [pts], color)
-                cv2.polylines(debug_cells, [pts], True, (255, 255, 255), 1)
 
                 cx, cy = int(cell.centroid.x * scale), int(cell.centroid.y * scale)
-                cv2.putText(debug_cells, label_main, (cx - 10, cy + 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                if label_sub is not None:
-                    cv2.putText(debug_cells, label_sub, (cx - 10, cy + 18),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 1)
+                border_draw_items.append(pts)
+                label_draw_items.append((label_main, cx, cy))
+
+            # Fill neutral cracks/holes left by rasterization or polygon clipping
+            # so debug cell renders match the contiguous panel visualization.
+            in_shape = mask > 127
+            is_black = np.all(debug_cells < 10, axis=2)
+            is_white = np.all(debug_cells > 245, axis=2)
+            is_hole = in_shape & (is_black | is_white)
+            seed_mask = in_shape & (~is_hole)
+            if np.any(is_hole) and np.any(seed_mask):
+                src = np.where(seed_mask, 0, 1).astype(np.uint8)
+                _, labels = cv2.distanceTransformWithLabels(
+                    src,
+                    cv2.DIST_L2,
+                    5,
+                    labelType=cv2.DIST_LABEL_PIXEL,
+                )
+                seed_y, seed_x = np.where(seed_mask)
+                nearest_idx = labels[is_hole] - 1
+                nearest_idx = np.clip(nearest_idx, 0, len(seed_y) - 1)
+                debug_cells[is_hole] = debug_cells[seed_y[nearest_idx], seed_x[nearest_idx]]
+
+            for pts in border_draw_items:
+                cv2.polylines(debug_cells, [pts], True, (255, 255, 255), 1)
+
+            for label_main, cx, cy in label_draw_items:
+                (tw, th), _ = cv2.getTextSize(label_main, cv2.FONT_HERSHEY_SIMPLEX, 0.72, 2)
+                tx, ty = int(cx - tw / 2), int(cy + th / 2)
+                cv2.putText(debug_cells, label_main, (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(debug_cells, label_main, (tx, ty),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 2, cv2.LINE_AA)
 
             if sites_arr is not None:
                 for i, (sx, sy) in enumerate(sites_arr):
@@ -1461,11 +1570,15 @@ class WeightedVoronoiLayout:
 
         # DEBUG: Voronoi cells before and after optimization
         initial_polys = None
+        initial_assignment_idx = None
         if engine.initial_sites_debug is not None:
             try:
                 init_sites = torch.tensor(engine.initial_sites_debug, device=DEVICE, dtype=torch.float32)
                 init_weights = torch.zeros(len(engine.initial_sites_debug), device=DEVICE, dtype=torch.float32)
                 initial_polys = engine.generate_polygons(init_sites, init_weights)
+                # Keep labels in timeline space for consistency across all debug images.
+                if initial_polys is not None:
+                    initial_assignment_idx = engine.match_images_spatial_order(initial_polys)
             except Exception as e:
                 if verbose:
                     print(f"  [DEBUG] Could not generate pre-opt Voronoi cells: {e}")
@@ -1475,7 +1588,7 @@ class WeightedVoronoiLayout:
                 'voronoi_debug_2_cells_before_opt.png',
                 initial_polys,
                 sites_arr=engine.initial_sites_debug,
-                assignment_idx=None,
+                assignment_idx=initial_assignment_idx,
             )
             _save_cells_debug_image(
                 'voronoi_debug_3_cells_after_opt.png',
@@ -1518,17 +1631,17 @@ class WeightedVoronoiLayout:
                     if pts.shape[0] < 3:
                         continue
                     pts = pts.astype(np.int32)
-                    # Use image index for color consistency
-                    np.random.seed(img_id)
-                    color = tuple(np.random.randint(50, 255, 3).tolist())
+                    # Color follows timeline order with a smooth gradient.
+                    color = _gradient_bgr(img_id, len(assignment_idx))
                     cv2.fillPoly(debug_assign, [pts], color)
-                    # Show image filename
                     cx, cy = int(cell.centroid.x * scale), int(cell.centroid.y * scale)
-                    label = frame_infos[img_id]['filename'].split('_')[-1][:8]
-                    cv2.putText(debug_assign, label, (cx-30, cy), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    cv2.putText(debug_assign, f"img{img_id}", (cx-20, cy+15), 
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.3, (0, 0, 0), 1)
+                    label = str(img_id + 1)
+                    (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)
+                    tx, ty = int(cx - tw / 2), int(cy + th / 2)
+                    cv2.putText(debug_assign, label, (tx, ty),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4, cv2.LINE_AA)
+                    cv2.putText(debug_assign, label, (tx, ty),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2, cv2.LINE_AA)
             cv2.imwrite(os.path.join(debug_dir, 'voronoi_debug_4_assignment.png'), debug_assign)
         
         # DEBUG: Stage 5 - Analysis (cell sizes, center dominance, assignment costs)

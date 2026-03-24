@@ -37,3 +37,7 @@ objectfree/*
 demo_outputs
 demo_*
 output/*
+./*.pt
+./*.pth
+./*.ckpt
+CAST/tests/*

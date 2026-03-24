@@ -64,7 +64,7 @@ CFG_RUN_ISNET = True                  # Always run ISNet detection
 CFG_ISNET_THRESHOLD = 0.3
 CFG_ISNET_MIN_AREA = 500
 CFG_MIN_BBOX_RATIO = 0.005             # min bbox_area / img_area
-CFG_MIN_BBOX_COUNT = 0                # min detections per frame
+CFG_MIN_BBOX_COUNT = 1                # min valid detections per frame after ratio filter
 CFG_FILTER_FRAMES_BY_ISNET = True     # Step 0.5b; override with argv
 
 # ISNet weights path (relative to CAST root)
@@ -419,6 +419,8 @@ if __name__ == '__main__':
                                      'objects': valid_objects,
                                      'num_objects': len(valid_objects)})
                     else:
+                        print(f"    [DROP] {frame_info.get('name', '<unknown>')}: "
+                              f"raw={len(objects)} valid={len(valid_objects)}")
                         dropped.append(frame_info['name'])
 
                 print(f"  Kept   : {len(kept)} frames")
@@ -488,7 +490,8 @@ if __name__ == '__main__':
             filter_no_detection=filter_no_detection,
             debug_every=debug_every,
             summary_json=summary_json_path,
-            allow_empty_detection=run_isnet and (not filter_frames_by_isnet),
+            # Keep timeline complete: frames without ISNet objects fallback to full-image bbox.
+            allow_empty_detection=run_isnet,
         )
 
         # ========================================================================
@@ -533,22 +536,141 @@ if __name__ == '__main__':
                 fontsize=14)
             axes[1].axis('off')
 
-            voronoi_debug = os.path.join(output_dir, '_voronoi_temp.png')
+            voronoi_debug_candidates = [
+                os.path.join(output_dir, 'voronoi_debug_3_cells_after_opt.png'),
+                os.path.join(output_dir, 'voronoi_debug_3_cells.png'),
+                os.path.join(output_dir, 'voronoi_debug_2_cells_before_opt.png'),
+                os.path.join(output_dir, '_voronoi_temp.png'),
+            ]
             slicing_path = os.path.join(output_dir, 'slicing_result.json')
             if os.path.isfile(slicing_path):
                 with open(slicing_path, 'r') as f:
                     slicing = json.load(f)
-                layout_vis = (cv2.imread(voronoi_debug)
-                              if os.path.isfile(voronoi_debug)
-                              else np.zeros((mask_img.shape[0], mask_img.shape[1], 3),
-                                            dtype=np.uint8))
+
+                has_voronoi_debug = False
+                for cand in voronoi_debug_candidates:
+                    if os.path.isfile(cand):
+                        layout_vis = cv2.imread(cand)
+                        if layout_vis is not None:
+                            has_voronoi_debug = True
+                            break
+                if not has_voronoi_debug and mask_img is not None:
+                    layout_vis = np.zeros((mask_img.shape[0], mask_img.shape[1], 3), dtype=np.uint8)
+                elif not has_voronoi_debug:
+                    layout_vis = np.zeros((1024, 1024, 3), dtype=np.uint8)
+
                 if layout_vis is not None:
-                    colors = plt.cm.tab20(
-                        np.linspace(0, 1, len(slicing.get('parts', []))))
-                    for i, part in enumerate(slicing.get('parts', [])):
+                    parts = slicing.get('parts', [])
+                    images = slicing.get('images', [])
+
+                    # Build part -> timeline index mapping from optimization output.
+                    part_to_timeline = {}
+                    for img_idx, img_info in enumerate(images):
+                        part_idx = img_info.get('assigned_part')
+                        if isinstance(part_idx, int):
+                            part_to_timeline[part_idx] = img_idx
+
+                    def _gradient_bgr(order_idx, total_items):
+                        anchors_rgb = np.array([
+                            [25.0, 32.0, 72.0],
+                            [32.0, 94.0, 166.0],
+                            [46.0, 154.0, 145.0],
+                            [170.0, 190.0, 110.0],
+                            [240.0, 180.0, 70.0],
+                            [203.0, 83.0, 42.0],
+                        ], dtype=np.float32)
+
+                        if total_items <= 1:
+                            t = 0.5
+                        else:
+                            t = float(order_idx) / float(max(1, total_items - 1))
+
+                        t = 0.08 + 0.84 * t
+                        t = t ** 0.92
+
+                        pos = t * (len(anchors_rgb) - 1)
+                        lo = int(np.floor(pos))
+                        hi = min(lo + 1, len(anchors_rgb) - 1)
+                        a = pos - lo
+                        rgb = (1.0 - a) * anchors_rgb[lo] + a * anchors_rgb[hi]
+
+                        luma = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+                        rgb = 0.88 * rgb + 0.12 * luma
+
+                        return (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+
+                    # Use the optimizer debug render as canonical visualization when available.
+                    # Fallback to local polygon rasterization only if debug render is missing.
+                    base_layout_vis = layout_vis.copy() if has_voronoi_debug else np.zeros_like(layout_vis)
+                    draw_items = []
+                    for i, part in enumerate(parts):
                         coords = np.array(part['coords'], dtype=np.int32)
-                        color = tuple(int(c * 255) for c in colors[i][:3])
-                        cv2.polylines(layout_vis, [coords], True, color, 2)
+
+                        timeline_idx = part_to_timeline.get(i, i)
+                        if not has_voronoi_debug:
+                            color = _gradient_bgr(timeline_idx, max(len(images), len(parts)))
+                            cv2.fillPoly(base_layout_vis, [coords], color)
+
+                        # Label each polygon with geometric cell ID (part index + 1).
+                        m = cv2.moments(coords)
+                        if m['m00'] != 0:
+                            cx = int(m['m10'] / m['m00'])
+                            cy = int(m['m01'] / m['m00'])
+                        else:
+                            cx, cy = int(coords[:, 0].mean()), int(coords[:, 1].mean())
+                        draw_items.append((coords, i, cx, cy))
+
+                    layout_vis = base_layout_vis.copy()
+
+                    # Preview-only cleanup: fill black holes inside shape mask so
+                    # Voronoi panel is visually contiguous even when raw debug render
+                    # has raster cracks between neighboring cells.
+                    if mask_img is not None:
+                        if (mask_img.shape[0] != layout_vis.shape[0]
+                                or mask_img.shape[1] != layout_vis.shape[1]):
+                            shape_mask_vis = cv2.resize(
+                                mask_img,
+                                (layout_vis.shape[1], layout_vis.shape[0]),
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                        else:
+                            shape_mask_vis = mask_img
+
+                        in_shape = shape_mask_vis > 127
+                        # Treat near-black and near-white pixels as raster cracks.
+                        # White seams appear between neighboring cells in debug renders.
+                        is_black = np.all(layout_vis < 10, axis=2)
+                        is_white = np.all(layout_vis > 245, axis=2)
+                        is_hole = is_black | is_white
+                        seed_mask = in_shape & (~is_hole)
+                        gap_mask = in_shape & is_hole
+                        if np.any(gap_mask) and np.any(seed_mask):
+                            src = np.where(seed_mask, 0, 1).astype(np.uint8)
+                            _, labels = cv2.distanceTransformWithLabels(
+                                src,
+                                cv2.DIST_L2,
+                                5,
+                                labelType=cv2.DIST_LABEL_PIXEL,
+                            )
+                            seed_y, seed_x = np.where(seed_mask)
+                            nearest_idx = labels[gap_mask] - 1
+                            nearest_idx = np.clip(nearest_idx, 0, len(seed_y) - 1)
+                            layout_vis[gap_mask] = layout_vis[
+                                seed_y[nearest_idx],
+                                seed_x[nearest_idx],
+                            ]
+
+                    for coords, cell_idx, cx, cy in draw_items:
+                        if not has_voronoi_debug:
+                            cv2.polylines(layout_vis, [coords], True, (255, 255, 255), 1)
+                        label = str(cell_idx + 1)
+                        (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.75, 2)
+                        tx, ty = int(cx - tw / 2), int(cy + th / 2)
+                        cv2.putText(layout_vis, label, (tx, ty),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 0), 4, cv2.LINE_AA)
+                        cv2.putText(layout_vis, label, (tx, ty),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
+
                     axes[2].imshow(cv2.cvtColor(layout_vis, cv2.COLOR_BGR2RGB))
             axes[2].set_title('Voronoi Layout', fontsize=14)
             axes[2].axis('off')

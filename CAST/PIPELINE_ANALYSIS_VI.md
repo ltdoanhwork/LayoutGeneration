@@ -151,42 +151,126 @@ for info in frame_infos:
 
 #### 2.3: Optimization Loop
 
-**3 Loss Functions:**
+Ta tối ưu một objective hợp phần theo dạng weighted multi-objective:
+
+$$
+\mathcal{L}_{total} = \lambda_{cap}\mathcal{L}_{cap} + \lambda_{asp}\mathcal{L}_{asp} + \lambda_{ov}\mathcal{L}_{ov}
+$$
+
+với thiết lập mặc định hiện tại:
 
 ```python
 CONFIG = {
-    'resolution': 512,        # Grid size
-    'num_iterations': 150,    # Iterations (user có thể set --num-iterations)
-    'tau': 60.0,              # Softmax temperature
-    'w_capacity': 400.0,      # L_cap
-    'w_aspect': 600.0,        # L_asp
-    'w_overlap': 1500.0,      # L_ov (HIGHEST - core loss)
+    'resolution': 512,
+    'num_iterations': 150,
+    'tau': 60.0,
+    'w_capacity': 400.0,   # lambda_cap
+    'w_aspect': 600.0,     # lambda_asp
+    'w_overlap': 1500.0,   # lambda_ov
 }
-
-for i in range(num_iterations):
-    # Soft Voronoi cells
-    probs = softmax(-tau * (aniso_distance - weights + bg_penalty))
-    
-    # L_cap: Phân bổ diện tích theo bbox area
-    areas = (probs * mask).sum(dim=(0,1))
-    loss_cap = ((areas - target_caps * total_pixels)**2).mean()
-    
-    # L_asp: Ép cell shape khớp bbox aspect ratio
-    var_x, var_y = weighted_variance(probs, centroids)
-    cell_aspects = sqrt(var_x / var_y)
-    loss_asp = ((log(cell_aspects) - log(target_aspects))**2).mean()
-    
-    # L_ov: Maximize bbox area nằm trong cell (CORE)
-    for cell_idx in range(n):
-        img_idx = anchor_img_idx[cell_idx]  # Identity mapping
-        bbox_mask = centered_bbox_at(centroids[cell_idx], target_bbox_dims[img_idx])
-        overlap = (probs[:,:,cell_idx] * bbox_mask * mask).sum() / bbox_area
-        loss_ov += (1 - overlap)**2
-    
-    loss = 400*loss_cap + 600*loss_asp + 1500*loss_ov
-    loss.backward()
-    optimizer.step()
 ```
+
+Trong đó, mỗi iteration tạo soft Voronoi assignment:
+
+$$
+p_i(x) = \operatorname{softmax}\big(-\tau\,(d_i(x)-w_i+b(x))\big)
+$$
+
+với $p_i(x)$ là xác suất pixel $x$ thuộc cell $i$, $d_i$ là anisotropic distance, $w_i$ là site weight, $b(x)$ là mask penalty ngoài shape.
+
+##### 2.3.1 Capacity Loss $\mathcal{L}_{cap}$ (điều khiển phân bổ diện tích)
+
+Mục tiêu: diện tích soft của mỗi cell bám theo tỷ lệ diện tích bbox mục tiêu lấy từ `summary.json`.
+
+$$
+A_i = \sum_{x \in \Omega} p_i(x)\,m(x), \quad
+\hat{A}_i = \rho_i\,|\Omega|,
+$$
+
+$$
+\mathcal{L}_{cap} = \frac{1}{N}\sum_{i=1}^{N}(A_i-\hat{A}_i)^2
+$$
+
+- $m(x) \in \{0,1\}$ là shape mask.
+- $\rho_i$ là tỷ lệ diện tích bbox của frame $i$ sau chuẩn hóa tổng.
+
+Ý nghĩa thực nghiệm: loss này giữ tổng thể bố cục "đúng budget diện tích" giữa các frame lớn/nhỏ, tránh cell bị lệch cực đoan khi chỉ tối ưu overlap.
+
+##### 2.3.2 Aspect Loss $\mathcal{L}_{asp}$ (điều khiển hình dạng cell)
+
+Mục tiêu: ép độ dẹt/kéo dài của cell gần với aspect ratio bbox mục tiêu.
+
+Gọi $\sigma_{x,i}^2, \sigma_{y,i}^2$ là phương sai có trọng số theo $p_i(x)$ quanh centroid cell, ta có:
+
+$$
+r_i = \sqrt{\frac{\sigma_{x,i}^2}{\sigma_{y,i}^2}},
+\quad
+r_i^* = \operatorname{clip}\left(\frac{w_i^{bbox}}{h_i^{bbox}}, 0.3, 3.0\right)
+$$
+
+$$
+\mathcal{L}_{asp} = \frac{1}{N}\sum_{i=1}^{N}\left(\log r_i - \log r_i^*\right)^2
+$$
+
+Dùng miền log để đối xứng sai số cho trường hợp quá rộng và quá cao, giúp ổn định hơn khi dữ liệu có phân bố aspect dài đuôi.
+
+##### 2.3.3 Overlap Retention Loss $\mathcal{L}_{ov}$ (loss lõi cho giữ nội dung)
+
+Mục tiêu: tối đa phần bbox "quan trọng" của ảnh nằm trong chính cell được tối ưu.
+
+Với mỗi cell $i$, tạo bbox mask chuẩn hóa tâm theo centroid cell (anchor theo identity mapping trong optimize), rồi tính:
+
+$$
+o_i = \frac{\sum_{x \in \Omega} p_i(x)\,b_i(x)\,m(x)}{\sum_{x \in \Omega} b_i(x)\,m(x)+\varepsilon}
+$$
+
+$$
+\mathcal{L}_{ov} = \frac{1}{N}\sum_{i=1}^{N}(1-o_i)^2
+$$
+
+- $b_i(x)$ là bbox prior mask của frame neo cho cell $i$.
+- $o_i \in [0,1]$ là tỷ lệ overlap chuẩn hóa.
+
+Đây là thành phần quan trọng nhất vì liên quan trực tiếp đến khả năng giữ foreground/object sau khi cắt cell.
+
+##### 2.3.4 Cách chọn hệ số $\lambda$ (paper-style, có thể tái lập)
+
+Thiết lập hiện tại:
+
+$$
+(\lambda_{cap},\lambda_{asp},\lambda_{ov}) = (400, 600, 1500)
+$$
+
+được chọn theo 3 nguyên tắc:
+
+1. **Ưu tiên semantic retention**: đặt $\lambda_{ov}$ lớn nhất để giảm lỗi bỏ sót vùng bbox quan trọng.
+2. **Giữ hình học trung gian ổn định**: $\lambda_{asp} > \lambda_{cap}$ vì sai lệch aspect gây méo crop/warp dễ thấy hơn sai lệch diện tích nhẹ.
+3. **Cân bằng độ lớn gradient ban đầu**: ở 10-20 iteration đầu, điều chỉnh sao cho ba gradient term cùng bậc độ lớn, sau đó bias nhẹ về $\mathcal{L}_{ov}$.
+
+##### 2.3.5 Quy trình tuning khuyến nghị
+
+Để chuyển domain (anime khác phong cách, bbox nhiễu hơn), nên tune theo thứ tự:
+
+1. Cố định $\tau$, tăng/giảm $\lambda_{ov}$ trước đến khi bbox retention đạt ngưỡng mục tiêu.
+2. Tune $\lambda_{asp}$ để giảm méo hình (quan sát phân phối $\log r_i-\log r_i^*$).
+3. Tune $\lambda_{cap}$ cuối để sửa sai lệch diện tích tổng thể mà không phá retention.
+
+Khoảng thử nghiệm thực dụng:
+
+- $\lambda_{ov} \in [1000, 2500]$
+- $\lambda_{asp} \in [300, 900]$
+- $\lambda_{cap} \in [200, 800]$
+
+Heuristic nhanh:
+
+- Nếu cell đúng size nhưng object hay bị cắt: tăng $\lambda_{ov}$.
+- Nếu object giữ được nhưng cell quá dẹt/quá cao: tăng $\lambda_{asp}$.
+- Nếu bố cục bị lệch tỷ lệ lớn-nhỏ giữa các frame: tăng $\lambda_{cap}$.
+
+##### 2.3.6 Lưu ý khi diễn giải loss
+
+- Vì optimize ở soft assignment, còn render dùng hard polygon (`argmin`), nên giá trị loss thấp không đảm bảo tuyệt đối coverage trên polygon cuối.
+- `match_images_spatial_order()` diễn ra sau optimize, nên có thể có anchor mismatch nhẹ; cấu hình lambda hiện tại đã thực nghiệm đủ bền với mismatch này.
 
 #### 2.4: Polygon Generation
 

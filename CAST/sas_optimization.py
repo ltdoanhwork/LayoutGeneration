@@ -1302,6 +1302,20 @@ def load_frame_infos_from_summary(summary_path, image_folder=None,
     if allow_empty_detection and empty_fallback:
         msg += f", {empty_fallback} with full-image bbox (no ISNet objects)"
     print(msg)
+
+    total_seen = len(frames_list)
+    if total_seen > 0 and skipped > 0 and not allow_empty_detection:
+        skip_ratio = skipped / total_seen
+        print(
+            f"  [WARN] Dropped {skipped}/{total_seen} frames from summary.json "
+            f"({skip_ratio:.1%}) due to empty detections. "
+            "Enable allow_empty_detection to keep them with full-image bbox."
+        )
+        if skip_ratio >= 0.20:
+            print(
+                "  [WARN][SEVERE] High frame-drop ratio detected (>=20%). "
+                "Layout quality/timeline fidelity may degrade due to data loss."
+            )
     return frame_infos
 
 
