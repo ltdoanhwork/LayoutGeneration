@@ -45,3 +45,8 @@ FINAL/*
 FINAL_data/
 CAST/isnet-detector/weights/
 CAST/isnet-detector/isnet_detector.egg-info/
+*.pt
+*.pth
+*.ckpt
+CAST_no_timeline/isnet-detector/weights/
+CAST_no_timeline/isnet-detector/isnet_detector.egg-info/

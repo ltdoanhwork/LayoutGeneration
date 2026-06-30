@@ -1,0 +1,17 @@
+pyproject.toml
+isnet_detector/__init__.py
+isnet_detector/cli.py
+isnet_detector/detector.py
+isnet_detector.egg-info/PKG-INFO
+isnet_detector.egg-info/SOURCES.txt
+isnet_detector.egg-info/dependency_links.txt
+isnet_detector.egg-info/entry_points.txt
+isnet_detector.egg-info/requires.txt
+isnet_detector.egg-info/top_level.txt
+isnet_detector/anime_seg/__init__.py
+isnet_detector/anime_seg/segmentation.py
+isnet_detector/anime_seg/model/__init__.py
+isnet_detector/anime_seg/model/inspyrenet.py
+isnet_detector/anime_seg/model/isnet.py
+isnet_detector/anime_seg/model/modnet.py
+isnet_detector/anime_seg/model/u2net.py

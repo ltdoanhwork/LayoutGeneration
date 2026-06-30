@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: isnet-detector
+Version: 0.1.0
+Summary: ISNet-based foreground object detector for anime/illustration frames
+Requires-Python: >=3.8
+Requires-Dist: torch
+Requires-Dist: torchvision
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: pillow
+Requires-Dist: pytorch-lightning
+Requires-Dist: huggingface_hub>=0.22
+Requires-Dist: timm
+Requires-Dist: kornia

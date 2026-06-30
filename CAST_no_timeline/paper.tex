@@ -1,0 +1,234 @@
+% ============================================================
+% Section: Layout Optimization (matches CAST_loss/voronoi_layout.py)
+% 3-loss system: L_cap_res + L_cvt_norm + L_fea
+% Core/Shell architecture with anisotropic power diagram
+% ============================================================
+
+\subsection{Hybrid Shape Initialization}
+\label{subsec:shape_init}
+
+Let $M$ denote the binary mask of the target container shape.
+Standard centroidal Voronoi initialization~\cite{du1999centroidal} often fails to cover
+thin protrusions in irregular silhouettes, producing degenerate
+cells near extremities. To improve spatial coverage, we construct
+an initialization set that combines skeleton-based anchors and
+interior sampling.
+
+\textbf{Skeleton Anchoring.}
+We compute the Medial Axis Transform (MAT) of the mask $M$ and
+extract endpoint vertices from the resulting skeleton graph. These
+endpoints correspond to tips of narrow structural components
+(ears, limbs, tails) and are selected as anchor sites $S_{\text{skel}}$,
+subject to a minimum mutual distance filter to avoid clustering.
+At most $\lfloor N/2 \rceil$ endpoints are retained so that the
+remaining sites can be distributed volumetrically.
+
+\textbf{Volumetric Filling.}
+Additional sites $S_{\text{fill}}$ are sampled from local maxima of the
+distance transform of $M$. These points densely populate interior
+regions and stabilize subsequent layout optimization.
+
+The final initialization set is
+\[
+S = S_{\text{skel}} \cup S_{\text{fill}},
+\]
+which provides a topology-aware starting configuration for layout
+optimization under Voronoi-style spatial partitioning~\cite{du1999centroidal}.
+
+% ============================================================
+% Core/Shell Architecture
+% ============================================================
+\subsection{Core--Shell Spatial Priors}
+\label{subsec:core_shell}
+
+To prevent cell collapse in narrow or branching mask regions, we decompose the layout domain $\Omega$ into two complementary zones: a \emph{core} region with guaranteed per-cell ownership, and a \emph{shell} region where cells compete via the power diagram.
+
+\textbf{Core construction.}
+For each site $s_i$, we allocate a compact core region $C_i$ via connected multi-source region growing from $s_i$ within the foreground mask $M$. The core quota is set proportional to the average cell area:
+\begin{equation}
+q_i^{\text{core}} = \min\bigl(\alpha \cdot \bar{A},\; \beta \cdot c_i |\Omega|\bigr),
+\end{equation}
+where $\bar{A} = |\Omega|/N$ is the average cell area, $c_i$ is the target capacity of cell $i$, and $\alpha, \beta$ are scaling parameters. The cores $\{C_i\}$ are grown in parallel, ensuring disjoint ownership: each foreground pixel belongs to at most one core.
+
+\textbf{Shell competition.}
+The remaining foreground area $\Omega_{\text{free}} = \Omega \setminus \bigcup_i C_i$ constitutes the shell region. Each cell $i$ is assigned a local shell support mask $\mathcal{S}_i \subseteq \Omega_{\text{free}}$ based on proximity to its core. The soft power-diagram assignment operates \emph{only} within these shell support masks, while core pixels retain fixed ownership. This guarantees that every cell maintains a minimum viable area throughout optimization, preventing collapse even in narrow topology branches.
+
+% ============================================================
+% Optimization
+% ============================================================
+\subsection{Layout Optimization}
+\label{subsec:layout_opt}
+
+Given a set of $N$ selected keyframes, our goal is to arrange them within a layout domain $\Omega$ such that the resulting collage is both content-aware and geometrically coherent. The domain $\Omega$ corresponds to the foreground region of the layout mask with total area $|\Omega|$.
+
+\vspace{1mm}
+\noindent\textbf{Event-aware target allocation.}
+For each keyframe $i$, we extract a primary event-support bounding box $B_i$ (Sec.~\ref{sec:key_event_abstraction}) with area $A_i^{\text{bbox}}$. We define a normalized target capacity:
+\begin{equation}
+c_i = \frac{\sqrt{A_i^{\text{bbox}}}}{\displaystyle\sum_{j=1}^{N} \sqrt{A_j^{\text{bbox}}}},
+\end{equation}
+where the square-root normalization prevents unusually large foreground boxes from dominating the layout, while retaining a monotonic relation between event extent and allocated area.
+
+\vspace{1mm}
+\noindent\textbf{Differentiable layout formulation.}
+We model the layout as an anisotropic weighted power diagram parameterized by site positions $\{s_i\}_{i=1}^N$ and scalar weights $\{w_i\}_{i=1}^N$. Each cell $i$ is associated with an anisotropy matrix $A_i \in \mathbb{R}^{2 \times 2}$ derived from the target aspect ratio $\alpha_i^{\text{target}}$ of bounding box $B_i$. To avoid degenerate tessellation when all frames share the same aspect ratio, we normalize the matrices such that $\frac{1}{N}\sum_i A_i = I$. The anisotropic power distance from pixel $x$ to site $i$ is:
+\begin{equation}
+d_i(x) = (x - s_i)^\top A_i\,(x - s_i) - w_i.
+\end{equation}
+
+Soft cell assignment operates \emph{only on the shell region} $\Omega_{\text{free}}$. For each shell pixel $x \in \mathcal{S}_i$, we compute:
+\begin{equation}
+P_i^{\text{shell}}(x) = \frac{\exp\bigl(-\tau\, d_i(x)\bigr) \cdot \mathbb{1}_{\mathcal{S}_i}(x)}
+              {\sum_{j=1}^{N} \exp\bigl(-\tau\, d_j(x)\bigr) \cdot \mathbb{1}_{\mathcal{S}_j}(x)},
+\end{equation}
+where $\tau$ is a temperature parameter and $\mathbb{1}_{\mathcal{S}_i}$ restricts competition to cells whose shell support covers pixel $x$. The full ownership probability combines core and shell:
+\begin{equation}
+P_i(x) = P_i^{\text{shell}}(x) + \mathbb{1}_{C_i}(x),
+\end{equation}
+where $\mathbb{1}_{C_i}(x) = 1$ if $x$ belongs to core $C_i$, ensuring guaranteed minimum ownership.
+
+\vspace{1mm}
+\noindent\textbf{Geometric attributes.}
+The soft cell area decomposes into core and shell contributions:
+\begin{equation}
+A_i = A_i^{\text{core}} + A_i^{\text{shell}}, \quad
+A_i^{\text{shell}} = \sum_{x \in \Omega_{\text{free}}} P_i^{\text{shell}}(x).
+\end{equation}
+The residual shell target for each cell is $T_i^{\text{res}} = \max(c_i |\Omega| - A_i^{\text{core}},\; 0)$. The effective area ratio is:
+\begin{equation}
+r_i = \frac{A_i^{\text{core}} + A_i^{\text{shell}}}{|\Omega|}.
+\end{equation}
+The soft centroid is computed over the full ownership:
+\begin{equation}
+\mu_i = \frac{\sum_{x \in \Omega} P_i(x)\,x}{A_i}.
+\end{equation}
+
+% ============================================================
+% Loss Functions
+% ============================================================
+\vspace{1mm}
+\noindent\textbf{Objective function.}
+We optimize the layout by minimizing a composite loss:
+\begin{equation}
+\mathcal{L} =
+\lambda_{\text{cap}}\, \gamma(t)\, \mathcal{L}_{\text{cap}} +
+\lambda_{\text{cvt}}\, \mathcal{L}_{\text{cvt}} +
+\lambda_{\text{fea}}\, \mathcal{L}_{\text{fea}},
+\label{eq:total_loss}
+\end{equation}
+where $\gamma(t)$ is a smooth capacity ramp factor that gradually activates $\mathcal{L}_{\text{cap}}$ during a warmup phase (Sec.~\ref{subsec:schedule}). The three terms address residual shell capacity matching ($\mathcal{L}_{\text{cap}}$), centroidal regularity ($\mathcal{L}_{\text{cvt}}$), and feasibility enforcement ($\mathcal{L}_{\text{fea}}$), respectively.
+
+An auxiliary collapse guard additionally penalizes cells whose shell-only ownership drops below a critical threshold, acting as a last-resort safety net independent of core support.
+
+\begin{figure*}[t]
+    \centering
+    \begin{subfigure}[t]{0.3\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{images/loss_cap.png}
+        \caption{Residual capacity: matches shell area to target after subtracting guaranteed core.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.3\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{images/loss_cvt.png}
+        \caption{Centroidal regularity: pulls sites toward cell centroids, weighted by inverse cell size for small-cell focus.}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[t]{0.3\linewidth}
+        \centering
+        \includegraphics[width=\linewidth]{images/loss_fea.png}
+        \caption{Feasibility: one-sided penalty that activates only when a cell's area falls below a safety floor.}
+    \end{subfigure}
+    \caption{
+    Illustration of the proposed layout optimization losses.
+    }
+    \label{fig:loss_all}
+    \vspace{-5pt}
+\end{figure*}
+
+\vspace{1mm}
+\noindent\textbf{Residual Capacity Loss (Fig.~\ref{fig:loss_all}a).}
+After subtracting core areas, we enforce that each cell's shell ownership matches its residual target. To ensure the loss magnitude is scale-invariant with respect to grid resolution, we normalize by the target itself:
+\begin{equation}
+\mathcal{L}_{\text{cap}} = \frac{1}{N}\sum_{i=1}^{N}
+\left(\frac{A_i^{\text{shell}} - T_i^{\text{res}}}{T_i^{\text{res}} + \epsilon}\right)^{\!2},
+\end{equation}
+where $\epsilon$ is a small constant for numerical stability. This dimensionless formulation prevents the capacity term from dominating other losses, which would cause premature cell collapse in early iterations.
+
+\vspace{1mm}
+\noindent\textbf{Normalized Centroidal Loss (Fig.~\ref{fig:loss_all}b).}
+To promote regular cell geometry, we encourage each site to coincide with its cell's centroid, with stronger penalization for smaller cells that are more vulnerable to collapse:
+\begin{equation}
+\mathcal{L}_{\text{cvt}} = \frac{1}{N}\sum_{i=1}^{N}
+\frac{\|s_i - \mu_i\|^2}{\sqrt{\max(r_i,\; r_{\min})}},
+\end{equation}
+where $r_i$ is the effective area ratio and $r_{\min}$ is a clamping floor. The inverse square-root weighting focuses gradient signal on small or at-risk cells, stabilizing them without interfering with well-sized cells.
+
+\vspace{1mm}
+\noindent\textbf{Feasibility Penalty (Fig.~\ref{fig:loss_all}c).}
+We define a one-sided penalty that activates only when a cell's effective area drops below a safety floor:
+\begin{equation}
+\mathcal{L}_{\text{fea}} = \phi(t) \sum_{i=1}^{N}
+\left(\frac{[\,f_i - r_i\,]_+}{c_i + \epsilon}\right)^{\!2},
+\end{equation}
+where $f_i = 0.82\,c_i$ is the feasibility floor for cell $i$, $[\cdot]_+$ denotes the ReLU (zero for satisfied cells), $c_i$ normalizes the deficit so gradient magnitude is independent of cell count, and $\phi(t) = 1.5 - 0.5\,t$ is a time-decaying boost that applies stronger pressure in early iterations when cells are most vulnerable. Critically, this loss produces \emph{zero gradient} for cells at or above the floor, so large cells are never forced to shrink---which would cascade into collapse of adjacent cells in narrow mask regions.
+
+% ============================================================
+% Two-Stage Schedule
+% ============================================================
+\vspace{1mm}
+\noindent\textbf{Two-stage optimization schedule.}
+\label{subsec:schedule}
+The optimization proceeds in two smoothly blended stages:
+
+\emph{Stage~1 (Warmup):} During the initial $t < t_w$ fraction of iterations, the weight learning rate and capacity ramp factor $\gamma(t)$ start from small values and increase smoothly. This allows sites to settle into geometrically favorable positions under centroidal and feasibility guidance before shell capacity competition begins.
+
+\emph{Stage~2 (Full optimization):} For $t \geq t_w$, all losses are fully active. The capacity ramp reaches $\gamma(t)=1$ and the weight learning rate reaches its maximum, enabling fine-grained area redistribution via additive power weights. The warmup ratio $t_w$ is adaptively extended when core support is large (high core fraction), since more guaranteed area requires gentler shell activation.
+
+Additionally, a trust-region constraint limits site motion to a neighborhood of the initial anchor positions, preventing sites from drifting into distant mask components during optimization.
+
+% ============================================================
+% Rendering
+% ============================================================
+\subsection{Chronology-Preserving Rendering}
+\label{subsec:composition}
+
+\textbf{Chronological Assignment.}
+To preserve temporal ordering, keyframes are assigned to layout
+cells according to a strictly monotonic mapping $\pi(t)=j$,
+following the broader motivation of story-driven visual summarization~\cite{lu2013story},
+where $t$ denotes the temporal index of the keyframe and $j$ denotes
+the spatial rank of the corresponding cell. Spatial ranks are determined
+by a boustrophedon (zigzag row-major) ordering: cells are partitioned
+into horizontal bands and sorted left-to-right in even rows and
+right-to-left in odd rows, producing a continuous reading path through
+the layout and reducing abrupt spatial jumps across neighboring rows.
+
+\textbf{Saliency-Guided Warping.}
+To fill highly irregular cell regions with minimal visible seams,
+we deform each keyframe using a Thin-Plate Spline (TPS) warp~\cite{bookstein2002principal} that
+preserves salient foreground geometry. A saliency map derived from
+the event-support mask assigns high rigidity weights to foreground
+control points and low weights to background control points,
+concentrating deformation in non-salient regions while keeping
+the primary subject intact.
+
+% ============================================================
+% CITE LIST
+% ============================================================
+%
+% \cite{du1999centroidal}
+%   Du, Q., Faber, V., Gunzburger, M.
+%   "Centroidal Voronoi tessellations: Applications and algorithms."
+%   SIAM Review, 41(4):637-676, 1999.
+%
+% \cite{bookstein2002principal}
+%   Bookstein, F. L.
+%   "Principal warps: Thin-plate splines and the decomposition
+%    of deformations."
+%   IEEE TPAMI, 11(6):567-585, 1989.
+%
+% \cite{lu2013story}
+%   Lu, Z., Grauman, K.
+%   "Story-driven summarization for egocentric video."
+%   IEEE CVPR, 2013.
